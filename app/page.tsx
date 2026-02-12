@@ -15,7 +15,8 @@ import {
   Tractor,
   Leaf,
   LogOut,
-  Map as MapIcon
+  Map as MapIcon,
+  User
 } from 'lucide-react'
 
 export default function Dashboard() {
@@ -45,16 +46,19 @@ export default function Dashboard() {
   useEffect(() => {
     const getData = async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) router.push('/login')
+      if (!user) {
+        router.push('/login')
+        return
+      }
 
       const { data } = await supabase.from('operating_areas').select('*').order('created_at', { ascending: true })
       setAreas(data || [])
       setLoading(false)
-      // Auto-select first area if exists
-      if (data && data.length > 0) setSelectedArea(data[0])
+      // Auto-select first area if exists and none selected
+      if (data && data.length > 0 && !selectedArea) setSelectedArea(data[0])
     }
     getData()
-  }, [router, supabase])
+  }, [router, supabase, selectedArea])
 
   // 2. Fetch Logs
   useEffect(() => {
@@ -72,7 +76,11 @@ export default function Dashboard() {
 
   // 3. Handle Create Area
   const handleCreateArea = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+
     const { error } = await supabase.from('operating_areas').insert({
+      user_id: user.id, // Explicitly link to user
       name: newAreaName,
       district: newAreaDistrict,
       type: newAreaType,
@@ -165,13 +173,26 @@ export default function Dashboard() {
             <Trees className="h-6 w-6 text-emerald-400" />
             <span className="font-bold text-lg tracking-tight">TraplineOS</span>
           </div>
-          <button 
-            onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
-            className="flex items-center gap-2 text-xs text-emerald-100 hover:text-white transition-colors"
-          >
-            <LogOut className="h-4 w-4" />
-            Sign Out
-          </button>
+          
+          <div className="flex items-center gap-3">
+             {/* PROFILE BUTTON */}
+             <button 
+              onClick={() => router.push('/profile')}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-800 border border-emerald-700 hover:bg-emerald-700 transition-all text-xs font-medium"
+            >
+              <User className="h-3 w-3" />
+              <span>ID Wallet</span>
+            </button>
+
+            {/* LOGOUT BUTTON */}
+            <button 
+              onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
+              className="p-2 text-emerald-300 hover:text-white transition-colors"
+              title="Sign Out"
+            >
+              <LogOut className="h-5 w-5" />
+            </button>
+          </div>
         </div>
       </nav>
 

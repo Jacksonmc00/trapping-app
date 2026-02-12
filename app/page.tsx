@@ -14,7 +14,8 @@ import {
   PawPrint,
   Tractor,
   Leaf,
-  LogOut
+  LogOut,
+  Map as MapIcon
 } from 'lucide-react'
 
 export default function Dashboard() {
@@ -23,10 +24,19 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [selectedArea, setSelectedArea] = useState<any>(null)
   
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false)
+  // Modals State
+  const [isLogModalOpen, setIsLogModalOpen] = useState(false)
+  const [isAreaModalOpen, setIsAreaModalOpen] = useState(false)
+  
+  // Log Form
   const [species, setSpecies] = useState('Beaver')
   const [sex, setSex] = useState('Male')
+
+  // Area Form
+  const [newAreaName, setNewAreaName] = useState('')
+  const [newAreaDistrict, setNewAreaDistrict] = useState('')
+  const [newAreaType, setNewAreaType] = useState('Registered Line')
+  const [newAreaLicense, setNewAreaLicense] = useState('')
 
   const supabase = createClient()
   const router = useRouter()
@@ -37,9 +47,11 @@ export default function Dashboard() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) router.push('/login')
 
-      const { data } = await supabase.from('operating_areas').select('*')
+      const { data } = await supabase.from('operating_areas').select('*').order('created_at', { ascending: true })
       setAreas(data || [])
       setLoading(false)
+      // Auto-select first area if exists
+      if (data && data.length > 0) setSelectedArea(data[0])
     }
     getData()
   }, [router, supabase])
@@ -58,7 +70,28 @@ export default function Dashboard() {
     getLogs()
   }, [selectedArea, supabase])
 
-  // 3. Handle Harvest Log
+  // 3. Handle Create Area
+  const handleCreateArea = async () => {
+    const { error } = await supabase.from('operating_areas').insert({
+      name: newAreaName,
+      district: newAreaDistrict,
+      type: newAreaType,
+      license_number: newAreaLicense
+    })
+
+    if (error) {
+      alert(error.message)
+    } else {
+      setIsAreaModalOpen(false)
+      setNewAreaName(''); setNewAreaDistrict(''); setNewAreaLicense('')
+      // Refresh list
+      const { data } = await supabase.from('operating_areas').select('*').order('created_at', { ascending: true })
+      setAreas(data || [])
+      if (data && data.length > 0) setSelectedArea(data[data.length - 1]) // Select the new one
+    }
+  }
+
+  // 4. Handle Harvest Log
   const handleLogHarvest = async () => {
     if (!selectedArea) return
 
@@ -71,9 +104,8 @@ export default function Dashboard() {
 
     if (error) {
       alert('Error logging harvest!')
-      console.error(error)
     } else {
-      setIsModalOpen(false)
+      setIsLogModalOpen(false)
       const { data } = await supabase
         .from('harvest_logs')
         .select('*')
@@ -83,7 +115,7 @@ export default function Dashboard() {
     }
   }
 
-  // 4. Generate PDF Report
+  // 5. Generate PDF Report
   const generatePDF = () => {
     if (!selectedArea) return;
     const doc = new jsPDF();
@@ -102,6 +134,7 @@ export default function Dashboard() {
     doc.setFontSize(12);
     doc.setTextColor(0);
     doc.text(`Operating Area: ${selectedArea.district} - ${selectedArea.name}`, 14, 45);
+    doc.text(`License: ${selectedArea.license_number || 'N/A'}`, 14, 52);
 
     const tableRows = logs.map(log => [
       new Date(log.date_harvested).toLocaleDateString(),
@@ -122,12 +155,6 @@ export default function Dashboard() {
     doc.save(`Harvest_Report_${selectedArea.district}_2026.pdf`);
   };
 
-  // 5. Sign Out
-  const handleSignOut = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
-  }
-
   return (
     <div className="min-h-screen bg-stone-100 text-stone-800 font-sans">
       
@@ -139,7 +166,7 @@ export default function Dashboard() {
             <span className="font-bold text-lg tracking-tight">TraplineOS</span>
           </div>
           <button 
-            onClick={handleSignOut}
+            onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
             className="flex items-center gap-2 text-xs text-emerald-100 hover:text-white transition-colors"
           >
             <LogOut className="h-4 w-4" />
@@ -158,7 +185,6 @@ export default function Dashboard() {
           </div>
           
           <div className="flex gap-3 flex-wrap">
-            {/* NEW CRM BUTTON */}
             <button 
               onClick={() => router.push('/landowners')}
               className="flex items-center gap-2 px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-900 transition-all shadow-sm"
@@ -167,7 +193,6 @@ export default function Dashboard() {
               <span className="hidden md:inline">CRM</span>
             </button>
 
-            {/* EXPORT BUTTON */}
             <button 
               onClick={generatePDF}
               disabled={!selectedArea || logs.length === 0}
@@ -179,13 +204,11 @@ export default function Dashboard() {
               `}
             >
               <FileText className="h-4 w-4" />
-              <span className="hidden md:inline">Export Report</span>
-              <span className="md:hidden">Export</span>
+              <span className="hidden md:inline">Report</span>
             </button>
 
-            {/* LOG BUTTON */}
             <button 
-              onClick={() => setIsModalOpen(true)}
+              onClick={() => setIsLogModalOpen(true)}
               disabled={!selectedArea}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white shadow-sm transition-all
                 ${!selectedArea 
@@ -202,17 +225,20 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
-          {/* LEFT COLUMN: Context Switcher */}
+          {/* LEFT COLUMN: Areas */}
           <div className="lg:col-span-4 space-y-4">
-            <h2 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Operating Areas</h2>
+            <div className="flex justify-between items-center">
+              <h2 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Operating Areas</h2>
+              <button onClick={() => setIsAreaModalOpen(true)} className="text-xs text-emerald-600 font-bold hover:underline">+ NEW</button>
+            </div>
             
             {loading ? (
               <div className="bg-white h-32 rounded-xl shadow-sm animate-pulse" />
             ) : areas.length === 0 ? (
-                // Empty state for areas
-                <div className="bg-white p-6 rounded-xl border border-dashed border-stone-300 text-center">
-                    <p className="text-stone-500 text-sm">No Areas Found.</p>
-                    <p className="text-xs text-stone-400 mt-1">You need to add an operating area in Supabase to start.</p>
+                <div onClick={() => setIsAreaModalOpen(true)} className="bg-white p-6 rounded-xl border-2 border-dashed border-stone-300 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition-all">
+                    <Plus className="h-8 w-8 mx-auto text-emerald-300 mb-2" />
+                    <p className="text-stone-500 text-sm font-bold">Add Your First Area</p>
+                    <p className="text-xs text-stone-400 mt-1">Click here to setup a Trap Line or Property</p>
                 </div>
             ) : (
               <div className="space-y-3">
@@ -260,8 +286,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-6 animate-in fade-in duration-300">
-                
-                {/* Stats Cards Row */}
+                {/* Stats Cards */}
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200">
                     <p className="text-xs text-stone-500 font-medium mb-1">Total Harvest</p>
@@ -298,7 +323,7 @@ export default function Dashboard() {
                       <PawPrint className="h-8 w-8 mx-auto mb-3 opacity-20" />
                       <p>No harvests logged yet.</p>
                       <button 
-                        onClick={() => setIsModalOpen(true)}
+                        onClick={() => setIsLogModalOpen(true)}
                         className="text-emerald-600 text-sm font-medium hover:underline mt-2"
                       >
                         Log your first catch
@@ -324,9 +349,6 @@ export default function Dashboard() {
                             <p className="text-sm font-medium text-stone-600">
                               {new Date(log.date_harvested).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                             </p>
-                            <p className="text-xs text-stone-400">
-                              {new Date(log.date_harvested).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
-                            </p>
                           </div>
                         </div>
                       ))}
@@ -338,75 +360,67 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* MODAL */}
-        {isModalOpen && (
+        {/* LOG HARVEST MODAL */}
+        {isLogModalOpen && (
           <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
-              <div className="bg-emerald-900 px-6 py-4 flex justify-between items-center">
-                <h2 className="text-white font-bold flex items-center gap-2">
-                  <Leaf className="h-4 w-4" />
-                  Log New Harvest
-                </h2>
-                <button onClick={() => setIsModalOpen(false)} className="text-emerald-300 hover:text-white">✕</button>
-              </div>
-              
-              <div className="p-6 space-y-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-900"><Leaf className="h-5 w-5" /> Log Harvest</h2>
+              <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Species</label>
-                  <select 
-                    value={species} 
-                    onChange={(e) => setSpecies(e.target.value)}
-                    className="w-full border-stone-200 rounded-lg p-3 text-stone-800 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none bg-stone-50"
-                  >
-                    <option>Beaver</option>
-                    <option>Marten</option>
-                    <option>Fisher</option>
-                    <option>Otter</option>
-                    <option>Wolf</option>
-                    <option>Coyote</option>
-                    <option>Muskrat</option>
-                    <option>Raccoon</option>
+                  <select value={species} onChange={e => setSpecies(e.target.value)} className="w-full border p-2 rounded">
+                    <option>Beaver</option><option>Marten</option><option>Fisher</option><option>Otter</option>
+                    <option>Wolf</option><option>Coyote</option><option>Muskrat</option><option>Raccoon</option>
                   </select>
                 </div>
-
                 <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Sex</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {['Male', 'Female', 'Unknown'].map((option) => (
-                      <button
-                        key={option}
-                        onClick={() => setSex(option)}
-                        className={`py-2 rounded-lg text-sm font-medium border transition-all
-                          ${sex === option 
-                            ? 'bg-emerald-100 border-emerald-500 text-emerald-800' 
-                            : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-50'
-                          }
-                        `}
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
+                    <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Sex</label>
+                    <select value={sex} onChange={e => setSex(e.target.value)} className="w-full border p-2 rounded">
+                        <option>Male</option><option>Female</option><option>Unknown</option>
+                    </select>
                 </div>
-              </div>
-
-              <div className="p-4 bg-stone-50 border-t border-stone-100 flex justify-end gap-3">
-                <button 
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 text-stone-600 font-medium hover:bg-stone-200 rounded-lg transition-colors"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleLogHarvest}
-                  className="px-6 py-2 bg-emerald-600 text-white font-bold rounded-lg hover:bg-emerald-700 shadow-md transition-all active:scale-95"
-                >
-                  Confirm Log
-                </button>
+                <div className="flex justify-end gap-2 mt-6">
+                  <button onClick={() => setIsLogModalOpen(false)} className="px-4 py-2 text-stone-500">Cancel</button>
+                  <button onClick={handleLogHarvest} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700">Save</button>
+                </div>
               </div>
             </div>
           </div>
         )}
+
+        {/* CREATE AREA MODAL */}
+        {isAreaModalOpen && (
+          <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-900"><MapIcon className="h-5 w-5" /> Add Operating Area</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Area Name</label>
+                  <input className="w-full border p-2 rounded" placeholder="e.g. South Bush Line" value={newAreaName} onChange={e => setNewAreaName(e.target.value)} />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">District / Town</label>
+                  <input className="w-full border p-2 rounded" placeholder="e.g. Pembroke" value={newAreaDistrict} onChange={e => setNewAreaDistrict(e.target.value)} />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Type</label>
+                    <select value={newAreaType} onChange={e => setNewAreaType(e.target.value)} className="w-full border p-2 rounded">
+                        <option>Registered Line</option><option>Private Land</option>
+                    </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">License # (Optional)</label>
+                  <input className="w-full border p-2 rounded" placeholder="T-12345" value={newAreaLicense} onChange={e => setNewAreaLicense(e.target.value)} />
+                </div>
+                <div className="flex justify-end gap-2 mt-6">
+                  <button onClick={() => setIsAreaModalOpen(false)} className="px-4 py-2 text-stone-500">Cancel</button>
+                  <button onClick={handleCreateArea} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700">Create Area</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
       </main>
     </div>
   )

@@ -10,7 +10,9 @@ import {
   User, 
   FileBadge, 
   Save,
-  ShieldCheck
+  ShieldCheck,
+  Plus,
+  Trash2
 } from 'lucide-react'
 
 export default function ProfilePage() {
@@ -19,9 +21,11 @@ export default function ProfilePage() {
   
   // ID Fields
   const [fullName, setFullName] = useState('')
-  const [trappingLicense, setTrappingLicense] = useState('')
   const [outdoorsCard, setOutdoorsCard] = useState('')
   const [driversLicense, setDriversLicense] = useState('')
+  
+  // Multiple Licenses State
+  const [licenses, setLicenses] = useState<string[]>(['']) 
 
   const supabase = createClient()
   const router = useRouter()
@@ -34,7 +38,6 @@ export default function ProfilePage() {
         return
       }
 
-      // Fetch existing profile
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
@@ -43,11 +46,14 @@ export default function ProfilePage() {
 
       if (data) {
         setFullName(data.full_name || '')
-        setTrappingLicense(data.trapping_license || '')
         setOutdoorsCard(data.outdoors_card || '')
         setDriversLicense(data.drivers_license || '')
+        
+        // Convert stored string back into a list (or default to empty one)
+        if (data.trapping_license) {
+          setLicenses(data.trapping_license.split(','))
+        }
       } else if (!error) {
-        // If no profile exists yet, create a blank one
         await supabase.from('profiles').insert({ id: user.id })
       }
       setLoading(false)
@@ -59,13 +65,16 @@ export default function ProfilePage() {
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
     
+    // Filter out empty lines and join with commas
+    const cleanLicenses = licenses.filter(l => l.trim() !== '').join(',')
+
     if (user) {
       const { error } = await supabase
         .from('profiles')
         .upsert({
           id: user.id,
           full_name: fullName,
-          trapping_license: trappingLicense,
+          trapping_license: cleanLicenses, // Stores as "T-123,T-456"
           outdoors_card: outdoorsCard,
           drivers_license: driversLicense,
           updated_at: new Date().toISOString(),
@@ -75,6 +84,24 @@ export default function ProfilePage() {
       else alert('Licenses Updated Successfully')
     }
     setSaving(false)
+  }
+
+  // Helper to update a specific license in the list
+  const updateLicense = (index: number, value: string) => {
+    const newLicenses = [...licenses]
+    newLicenses[index] = value
+    setLicenses(newLicenses)
+  }
+
+  // Helper to add a new blank line
+  const addLicenseLine = () => {
+    setLicenses([...licenses, ''])
+  }
+
+  // Helper to remove a line
+  const removeLicenseLine = (index: number) => {
+    const newLicenses = licenses.filter((_, i) => i !== index)
+    setLicenses(newLicenses.length ? newLicenses : ['']) // Keep at least one
   }
 
   return (
@@ -107,7 +134,7 @@ export default function ProfilePage() {
             <div className="bg-gradient-to-br from-emerald-800 to-emerald-950 rounded-2xl p-6 text-white shadow-xl relative overflow-hidden border border-emerald-700">
               <div className="absolute top-0 right-0 p-32 bg-emerald-500 rounded-full blur-3xl opacity-10 -mr-10 -mt-10"></div>
               
-              <div className="flex justify-between items-start mb-8 relative z-10">
+              <div className="flex justify-between items-start mb-6 relative z-10">
                 <div>
                   <h3 className="text-emerald-200 font-bold uppercase tracking-widest text-xs">Ontario Trapper</h3>
                   <p className="font-bold text-xl">{fullName || 'YOUR NAME'}</p>
@@ -116,10 +143,20 @@ export default function ProfilePage() {
               </div>
 
               <div className="space-y-4 relative z-10">
-                <div className="flex justify-between border-b border-emerald-700/50 pb-2">
-                  <span className="text-emerald-300 text-sm">Trapping License</span>
-                  <span className="font-mono font-bold tracking-wide">{trappingLicense || '---'}</span>
+                {/* Dynamic License List on Card */}
+                <div className="border-b border-emerald-700/50 pb-2">
+                  <span className="text-emerald-300 text-sm block mb-1">Trapping Licenses</span>
+                  {licenses.filter(l => l.trim() !== '').length === 0 ? (
+                    <span className="font-mono text-sm opacity-50">---</span>
+                  ) : (
+                    licenses.filter(l => l.trim() !== '').map((lic, i) => (
+                      <div key={i} className="font-mono font-bold tracking-wide text-sm">
+                        {lic}
+                      </div>
+                    ))
+                  )}
                 </div>
+
                 <div className="flex justify-between border-b border-emerald-700/50 pb-2">
                   <span className="text-emerald-300 text-sm">Outdoors Card</span>
                   <span className="font-mono font-bold tracking-wide">{outdoorsCard || '---'}</span>
@@ -138,7 +175,7 @@ export default function ProfilePage() {
                 Edit Credentials
               </h2>
               
-              <div className="space-y-4">
+              <div className="space-y-5">
                 <div>
                   <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Full Legal Name</label>
                   <div className="relative">
@@ -152,16 +189,39 @@ export default function ProfilePage() {
                   </div>
                 </div>
 
+                {/* DYNAMIC LICENSE INPUTS */}
                 <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Trapping License Number(s)</label>
-                  <div className="relative">
-                    <FileBadge className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
-                    <input 
-                      value={trappingLicense}
-                      onChange={e => setTrappingLicense(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
-                      placeholder="e.g. T-123456"
-                    />
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-2">Trapping License Number(s)</label>
+                  <div className="space-y-2">
+                    {licenses.map((lic, index) => (
+                      <div key={index} className="flex gap-2">
+                        <div className="relative flex-1">
+                          <FileBadge className="absolute left-3 top-3 h-4 w-4 text-stone-400" />
+                          <input 
+                            value={lic}
+                            onChange={e => updateLicense(index, e.target.value)}
+                            className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none"
+                            placeholder="e.g. T-12345 (Pembroke)"
+                          />
+                        </div>
+                        {licenses.length > 1 && (
+                          <button 
+                            onClick={() => removeLicenseLine(index)}
+                            className="p-2 text-stone-400 hover:text-red-500 transition-colors"
+                          >
+                            <Trash2 className="h-5 w-5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    
+                    <button 
+                      onClick={addLicenseLine}
+                      className="text-xs font-bold text-emerald-600 flex items-center gap-1 hover:text-emerald-700 mt-2"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add Another License
+                    </button>
                   </div>
                 </div>
 

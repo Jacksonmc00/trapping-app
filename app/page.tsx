@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
+import { useRouter } from 'next/navigation'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { 
@@ -10,10 +11,10 @@ import {
   Plus, 
   MapPin, 
   Calendar, 
-  ChevronRight, 
   PawPrint,
   Tractor,
-  Leaf
+  Leaf,
+  LogOut
 } from 'lucide-react'
 
 export default function Dashboard() {
@@ -28,16 +29,20 @@ export default function Dashboard() {
   const [sex, setSex] = useState('Male')
 
   const supabase = createClient()
+  const router = useRouter()
 
   // 1. Fetch Areas
   useEffect(() => {
     const getData = async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) router.push('/login')
+
       const { data } = await supabase.from('operating_areas').select('*')
       setAreas(data || [])
       setLoading(false)
     }
     getData()
-  }, [])
+  }, [router, supabase])
 
   // 2. Fetch Logs
   useEffect(() => {
@@ -51,7 +56,7 @@ export default function Dashboard() {
       setLogs(data || [])
     }
     getLogs()
-  }, [selectedArea])
+  }, [selectedArea, supabase])
 
   // 3. Handle Harvest Log
   const handleLogHarvest = async () => {
@@ -83,9 +88,8 @@ export default function Dashboard() {
     if (!selectedArea) return;
     const doc = new jsPDF();
     
-    // Professional Header
     doc.setFontSize(22);
-    doc.setTextColor(22, 101, 52); // Emerald Green
+    doc.setTextColor(22, 101, 52); 
     doc.text('ONTARIO FUR HARVEST REPORT', 14, 22);
     
     doc.setFontSize(10);
@@ -93,12 +97,11 @@ export default function Dashboard() {
     doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 14, 30);
 
     doc.setDrawColor(200);
-    doc.line(14, 35, 196, 35); // Horizontal line
+    doc.line(14, 35, 196, 35); 
 
     doc.setFontSize(12);
     doc.setTextColor(0);
-    doc.text(`License Holder: Jack (License #${selectedArea.license_number || 'Pending'})`, 14, 45);
-    doc.text(`Operating Area: ${selectedArea.district} - ${selectedArea.name}`, 14, 52);
+    doc.text(`Operating Area: ${selectedArea.district} - ${selectedArea.name}`, 14, 45);
 
     const tableRows = logs.map(log => [
       new Date(log.date_harvested).toLocaleDateString(),
@@ -112,26 +115,36 @@ export default function Dashboard() {
       body: tableRows,
       startY: 60,
       theme: 'grid',
-      headStyles: { fillColor: [22, 101, 52] }, // Emerald header
+      headStyles: { fillColor: [22, 101, 52] }, 
       styles: { fontSize: 10 }
     });
 
     doc.save(`Harvest_Report_${selectedArea.district}_2026.pdf`);
   };
 
+  // 5. Sign Out
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
+
   return (
     <div className="min-h-screen bg-stone-100 text-stone-800 font-sans">
       
-      {/* PROFESSIONAL NAVBAR */}
+      {/* NAVBAR */}
       <nav className="bg-emerald-900 text-white shadow-lg sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Trees className="h-6 w-6 text-emerald-400" />
             <span className="font-bold text-lg tracking-tight">TraplineOS</span>
           </div>
-          <div className="text-xs text-emerald-300 bg-emerald-950 px-2 py-1 rounded border border-emerald-800">
-            v1.0 Beta
-          </div>
+          <button 
+            onClick={handleSignOut}
+            className="flex items-center gap-2 text-xs text-emerald-100 hover:text-white transition-colors"
+          >
+            <LogOut className="h-4 w-4" />
+            Sign Out
+          </button>
         </div>
       </nav>
 
@@ -144,7 +157,17 @@ export default function Dashboard() {
             <p className="text-stone-500 text-sm">Manage your lines, quota, and harvests.</p>
           </div>
           
-          <div className="flex gap-3">
+          <div className="flex gap-3 flex-wrap">
+            {/* NEW CRM BUTTON */}
+            <button 
+              onClick={() => router.push('/landowners')}
+              className="flex items-center gap-2 px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-900 transition-all shadow-sm"
+            >
+              <Tractor className="h-4 w-4" />
+              <span className="hidden md:inline">CRM</span>
+            </button>
+
+            {/* EXPORT BUTTON */}
             <button 
               onClick={generatePDF}
               disabled={!selectedArea || logs.length === 0}
@@ -160,6 +183,7 @@ export default function Dashboard() {
               <span className="md:hidden">Export</span>
             </button>
 
+            {/* LOG BUTTON */}
             <button 
               onClick={() => setIsModalOpen(true)}
               disabled={!selectedArea}
@@ -178,12 +202,18 @@ export default function Dashboard() {
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           
-          {/* LEFT COLUMN: Context Switcher (4 cols) */}
+          {/* LEFT COLUMN: Context Switcher */}
           <div className="lg:col-span-4 space-y-4">
             <h2 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Operating Areas</h2>
             
             {loading ? (
               <div className="bg-white h-32 rounded-xl shadow-sm animate-pulse" />
+            ) : areas.length === 0 ? (
+                // Empty state for areas
+                <div className="bg-white p-6 rounded-xl border border-dashed border-stone-300 text-center">
+                    <p className="text-stone-500 text-sm">No Areas Found.</p>
+                    <p className="text-xs text-stone-400 mt-1">You need to add an operating area in Supabase to start.</p>
+                </div>
             ) : (
               <div className="space-y-3">
                 {areas.map((area) => (
@@ -220,7 +250,7 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* RIGHT COLUMN: Stats & Logs (8 cols) */}
+          {/* RIGHT COLUMN: Stats & Logs */}
           <div className="lg:col-span-8">
             {!selectedArea ? (
               <div className="h-full min-h-[400px] flex flex-col items-center justify-center bg-stone-200/50 rounded-2xl border-2 border-dashed border-stone-300 text-stone-400">
@@ -308,7 +338,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* MODERN MODAL */}
+        {/* MODAL */}
         {isModalOpen && (
           <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">

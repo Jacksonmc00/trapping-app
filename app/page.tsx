@@ -5,7 +5,7 @@ import { createClient } from '@/utils/supabase/client'
 import { useRouter } from 'next/navigation'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import toast from 'react-hot-toast' // <--- NEW IMPORT
+import toast from 'react-hot-toast'
 import { 
   Trees, FileText, Plus, MapPin, Calendar, PawPrint, Tractor, Leaf, 
   LogOut, Map as MapIcon, User, Trash2, Pencil
@@ -85,11 +85,11 @@ export default function Dashboard() {
     getLogs()
   }, [selectedArea, supabase])
 
+  // --- FIXED: SAVE AREA ---
   const handleSaveArea = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
-    let error
     const payload = {
       name: newAreaName,
       district: newAreaDistrict,
@@ -97,37 +97,51 @@ export default function Dashboard() {
       license_number: newAreaLicense
     }
 
-    // Using TOAST.PROMISE gives a nice "Loading..." spinner then "Success!"
-    const savePromise = isEditingArea
-      ? supabase.from('operating_areas').update(payload).eq('id', areaId)
-      : supabase.from('operating_areas').insert({ user_id: user.id, ...payload })
+    // 1. Wrap the logic in a real async function that throws on error
+    const savePromise = async () => {
+        let error;
+        if (isEditingArea) {
+             const res = await supabase.from('operating_areas').update(payload).eq('id', areaId)
+             error = res.error
+        } else {
+             const res = await supabase.from('operating_areas').insert({ user_id: user.id, ...payload })
+             error = res.error
+        }
 
-    toast.promise(savePromise, {
+        if (error) throw new Error(error.message) // <--- THIS is what triggers the Red Toast
+        return true
+    }
+
+    // 2. Pass the FUNCTION call to toast.promise
+    toast.promise(savePromise(), {
       loading: 'Saving area...',
       success: 'Area saved successfully!',
-      error: 'Error saving area',
+      error: (err) => `Error: ${err.message}`,
     })
 
-    const res = await savePromise
-
-    if (!res.error) {
-      setIsAreaModalOpen(false)
-      setNewAreaName('')
-      const data = await refreshAreas()
-      if (isEditingArea && selectedArea?.id === areaId) {
-         const updated = data?.find(a => a.id === areaId)
-         setSelectedArea(updated)
-      } else if (!isEditingArea && data) {
-         setSelectedArea(data[data.length - 1])
-      }
+    // 3. Wait for it to finish to update UI
+    try {
+        await savePromise()
+        setIsAreaModalOpen(false)
+        setNewAreaName('')
+        const data = await refreshAreas()
+        
+        if (isEditingArea && selectedArea?.id === areaId) {
+             const updated = data?.find(a => a.id === areaId)
+             setSelectedArea(updated)
+        } else if (!isEditingArea && data) {
+             setSelectedArea(data[data.length - 1])
+        }
+    } catch (e) {
+        // Error is handled by Toast, do nothing here
     }
   }
 
+  // --- HANDLE DELETE ---
   const handleDeleteArea = async (e: any, id: string) => {
     e.stopPropagation()
     if (!confirm('Are you sure? This will delete the area and ALL its harvest logs.')) return
 
-    // We can chain promises for a cleaner UX
     const deletePromise = async () => {
         await supabase.from('harvest_logs').delete().eq('operating_area_id', id)
         const { error } = await supabase.from('operating_areas').delete().eq('id', id)
@@ -168,34 +182,40 @@ export default function Dashboard() {
     setIsAreaModalOpen(true)
   }
 
+  // --- FIXED: LOG HARVEST ---
   const handleLogHarvest = async () => {
     if (!selectedArea) return
 
-    const promise = supabase.from('harvest_logs').insert({
-      operating_area_id: selectedArea.id,
-      species: species,
-      sex: sex,
-      date_harvested: new Date().toISOString(),
-    })
+    // 1. Wrap in standard Promise
+    const logPromise = async () => {
+        const { error } = await supabase.from('harvest_logs').insert({
+            operating_area_id: selectedArea.id,
+            species: species,
+            sex: sex,
+            date_harvested: new Date().toISOString(),
+        })
+        if (error) throw new Error(error.message)
+    }
 
-    toast.promise(promise, {
+    toast.promise(logPromise(), {
         loading: 'Logging catch...',
         success: `${species} logged!`,
         error: 'Failed to log'
     })
 
-    const { error } = await promise
-
-    if (!error) {
-      setIsLogModalOpen(false)
-      const { data } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
-      setLogs(data || [])
+    try {
+        await logPromise()
+        setIsLogModalOpen(false)
+        const { data } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
+        setLogs(data || [])
+    } catch (e) {
+        // Handled by toast
     }
   }
 
   const generatePDF = () => {
     if (!selectedArea) return;
-    toast.success('Generating Report...') // Simple success toast
+    toast.success('Generating Report...')
     const doc = new jsPDF();
     doc.setFontSize(22); doc.setTextColor(22, 101, 52); doc.text('ONTARIO FUR HARVEST REPORT', 14, 22);
     doc.setFontSize(10); doc.setTextColor(100); doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 14, 30);

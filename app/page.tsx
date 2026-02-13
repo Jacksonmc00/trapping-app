@@ -97,8 +97,7 @@ export default function Dashboard() {
       license_number: newAreaLicense
     }
 
-    // 1. Wrap the logic in a real async function that throws on error
-    const savePromise = async () => {
+    const savePromiseFn = async () => {
         let error;
         if (isEditingArea) {
              const res = await supabase.from('operating_areas').update(payload).eq('id', areaId)
@@ -107,21 +106,21 @@ export default function Dashboard() {
              const res = await supabase.from('operating_areas').insert({ user_id: user.id, ...payload })
              error = res.error
         }
-
-        if (error) throw new Error(error.message) // <--- THIS is what triggers the Red Toast
+        if (error) throw new Error(error.message) 
         return true
     }
 
-    // 2. Pass the FUNCTION call to toast.promise
-    toast.promise(savePromise(), {
+    // Execute exactly ONCE
+    const executingPromise = savePromiseFn();
+
+    toast.promise(executingPromise, {
       loading: 'Saving area...',
       success: 'Area saved successfully!',
       error: (err) => `Error: ${err.message}`,
     })
 
-    // 3. Wait for it to finish to update UI
     try {
-        await savePromise()
+        await executingPromise; // Wait for the single execution to finish
         setIsAreaModalOpen(false)
         setNewAreaName('')
         const data = await refreshAreas()
@@ -133,29 +132,32 @@ export default function Dashboard() {
              setSelectedArea(data[data.length - 1])
         }
     } catch (e) {
-        // Error is handled by Toast, do nothing here
+        // Handled by toast
     }
   }
 
-  // --- HANDLE DELETE ---
+  // --- FIXED: HANDLE DELETE ---
   const handleDeleteArea = async (e: any, id: string) => {
     e.stopPropagation()
     if (!confirm('Are you sure? This will delete the area and ALL its harvest logs.')) return
 
-    const deletePromise = async () => {
+    const deletePromiseFn = async () => {
         await supabase.from('harvest_logs').delete().eq('operating_area_id', id)
         const { error } = await supabase.from('operating_areas').delete().eq('id', id)
         if (error) throw error
     }
 
-    toast.promise(deletePromise(), {
+    // Execute exactly ONCE
+    const executingPromise = deletePromiseFn();
+
+    toast.promise(executingPromise, {
         loading: 'Deleting...',
         success: 'Area deleted',
         error: 'Could not delete area'
     })
 
     try {
-        await deletePromise()
+        await executingPromise; // Wait for the single execution
         const data = await refreshAreas()
         if (selectedArea?.id === id) {
             setSelectedArea(data && data.length > 0 ? data[0] : null)
@@ -186,8 +188,7 @@ export default function Dashboard() {
   const handleLogHarvest = async () => {
     if (!selectedArea) return
 
-    // 1. Wrap in standard Promise
-    const logPromise = async () => {
+    const logPromiseFn = async () => {
         const { error } = await supabase.from('harvest_logs').insert({
             operating_area_id: selectedArea.id,
             species: species,
@@ -197,14 +198,17 @@ export default function Dashboard() {
         if (error) throw new Error(error.message)
     }
 
-    toast.promise(logPromise(), {
+    // Execute exactly ONCE
+    const executingPromise = logPromiseFn();
+
+    toast.promise(executingPromise, {
         loading: 'Logging catch...',
         success: `${species} logged!`,
         error: 'Failed to log'
     })
 
     try {
-        await logPromise()
+        await executingPromise; // Wait for the single execution
         setIsLogModalOpen(false)
         const { data } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
         setLogs(data || [])

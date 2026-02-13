@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { useRouter } from 'next/navigation'
 import jsPDF from 'jspdf'
+import toast from 'react-hot-toast'
 import { 
   Trees, 
   ArrowLeft, 
@@ -11,7 +12,9 @@ import {
   Phone, 
   MapPin, 
   FileCheck,
-  Tractor
+  Tractor,
+  Pencil,
+  Trash2
 } from 'lucide-react'
 
 export default function LandownersPage() {
@@ -19,6 +22,10 @@ export default function LandownersPage() {
   const [loading, setLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
   
+  // Edit State
+  const [isEditing, setIsEditing] = useState(false)
+  const [editingId, setEditingId] = useState('')
+
   // Form State
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
@@ -28,40 +35,109 @@ export default function LandownersPage() {
   const router = useRouter()
 
   // 1. Fetch Data
+  const fetchPermissions = async () => {
+    const { data } = await supabase.from('land_permissions').select('*').order('created_at', { ascending: false })
+    setPermissions(data || [])
+  }
+
   useEffect(() => {
     const getData = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) router.push('/login')
-
-      const { data } = await supabase.from('land_permissions').select('*').order('created_at', { ascending: false })
-      setPermissions(data || [])
+      await fetchPermissions()
       setLoading(false)
     }
     getData()
   }, [router, supabase])
 
-  // 2. Add New Landowner
-  const handleAdd = async () => {
-    const { error } = await supabase.from('land_permissions').insert({
-      landowner_name: name,
-      phone: phone,
-      property_location: location,
-      status: 'Active'
+  // 2. Save Contact (Handles both Add and Edit)
+  const handleSave = async () => {
+    const savePromise = async () => {
+      let error;
+      
+      if (isEditing) {
+        // UPDATE EXISTING
+        const res = await supabase.from('land_permissions').update({
+          landowner_name: name,
+          phone: phone,
+          property_location: location
+        }).eq('id', editingId)
+        error = res.error
+      } else {
+        // ADD NEW
+        const res = await supabase.from('land_permissions').insert({
+          landowner_name: name,
+          phone: phone,
+          property_location: location,
+          status: 'Active'
+        })
+        error = res.error
+      }
+
+      if (error) throw new Error(error.message)
+    }
+
+    toast.promise(savePromise(), {
+      loading: isEditing ? 'Updating contact...' : 'Saving contact...',
+      success: isEditing ? 'Contact updated!' : 'Contact added successfully!',
+      error: (err) => `Error: ${err.message}`
     })
 
-    if (error) {
-      alert(error.message)
-    } else {
+    try {
+      await savePromise()
       setIsModalOpen(false)
-      setName(''); setPhone(''); setLocation('');
-      // Refresh list
-      const { data } = await supabase.from('land_permissions').select('*').order('created_at', { ascending: false })
-      setPermissions(data || [])
+      resetForm()
+      await fetchPermissions()
+    } catch (e) {
+      // Error handled by toast
     }
   }
 
-  // 3. Generate Legal PDF (The "Permission Slip")
+  // 3. Delete Contact
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this contact?')) return
+
+    const deletePromise = async () => {
+      const { error } = await supabase.from('land_permissions').delete().eq('id', id)
+      if (error) throw new Error(error.message)
+    }
+
+    toast.promise(deletePromise(), {
+      loading: 'Deleting contact...',
+      success: 'Contact deleted',
+      error: 'Failed to delete contact'
+    })
+
+    try {
+      await deletePromise()
+      await fetchPermissions()
+    } catch (e) {
+      // Error handled by toast
+    }
+  }
+
+  // Helper Functions for Modal
+  const resetForm = () => {
+    setName(''); setPhone(''); setLocation(''); setIsEditing(false); setEditingId('');
+  }
+
+  const openAddModal = () => {
+    resetForm()
+    setIsModalOpen(true)
+  }
+
+  const openEditModal = (p: any) => {
+    setName(p.landowner_name)
+    setPhone(p.phone || '')
+    setLocation(p.property_location || '')
+    setEditingId(p.id)
+    setIsEditing(true)
+    setIsModalOpen(true)
+  }
+
+  // 4. Generate Legal PDF (The "Permission Slip")
   const generateContract = (p: any) => {
+    toast.success('Generating contract...')
     const doc = new jsPDF()
     
     // Header
@@ -98,7 +174,7 @@ export default function LandownersPage() {
       {/* Nav */}
       <nav className="bg-emerald-900 text-white shadow-lg sticky top-0 z-10">
         <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => router.push('/')}>
+          <div className="flex items-center gap-2 cursor-pointer hover:text-emerald-300 transition-colors" onClick={() => router.push('/')}>
             <ArrowLeft className="h-5 w-5" />
             <span className="font-bold">Back to Dashboard</span>
           </div>
@@ -106,46 +182,70 @@ export default function LandownersPage() {
         </div>
       </nav>
 
-      <main className="max-w-4xl mx-auto p-6">
+      <main className="max-w-4xl mx-auto p-4 md:p-6">
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-stone-900">Landowner CRM</h1>
-            <p className="text-stone-500">Manage private land access and contracts.</p>
+            <p className="text-stone-500 text-sm">Manage private land access and contracts.</p>
           </div>
           <button 
-            onClick={() => setIsModalOpen(true)}
-            className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 flex items-center gap-2 font-medium shadow-sm"
+            onClick={openAddModal}
+            className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 flex items-center gap-2 font-medium shadow-sm transition-transform active:scale-95"
           >
             <Plus className="h-4 w-4" />
-            Add Contact
+            <span className="hidden md:inline">Add Contact</span>
           </button>
         </div>
 
         {/* LIST */}
         <div className="space-y-4">
-          {loading ? <p className="text-stone-400">Loading...</p> : permissions.length === 0 ? (
-            <div className="text-center p-12 bg-white rounded-xl border border-dashed border-stone-300">
+          {loading ? (
+            <div className="bg-white h-32 rounded-xl shadow-sm border border-stone-200 animate-pulse" />
+          ) : permissions.length === 0 ? (
+            <div className="text-center p-12 bg-white rounded-xl border-2 border-dashed border-stone-300">
               <Tractor className="h-12 w-12 mx-auto text-stone-300 mb-2" />
-              <p className="text-stone-500">No landowners added yet.</p>
+              <p className="text-stone-500 font-medium">No landowners added yet.</p>
+              <button onClick={openAddModal} className="text-emerald-600 text-sm font-bold mt-2 hover:underline">Add your first property</button>
             </div>
           ) : (
             permissions.map((p) => (
-              <div key={p.id} className="bg-white p-6 rounded-xl shadow-sm border border-stone-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div>
-                  <h3 className="font-bold text-lg text-stone-800">{p.landowner_name}</h3>
-                  <div className="flex items-center gap-4 text-sm text-stone-500 mt-1">
-                    <span className="flex items-center gap-1"><MapPin className="h-3 w-3" /> {p.property_location}</span>
-                    <span className="flex items-center gap-1"><Phone className="h-3 w-3" /> {p.phone}</span>
+              <div key={p.id} className="bg-white p-5 rounded-xl shadow-sm border border-stone-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-emerald-200 transition-colors group">
+                <div className="flex-1 w-full">
+                  <div className="flex justify-between items-start">
+                    <h3 className="font-bold text-lg text-stone-800">{p.landowner_name}</h3>
+                    
+                    {/* EDIT & DELETE MOBILE/DESKTOP ICONS */}
+                    <div className="flex items-center gap-1 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button 
+                        onClick={() => openEditModal(p)}
+                        className="p-2 text-stone-400 hover:text-emerald-600 hover:bg-stone-100 rounded-lg transition-colors"
+                        title="Edit Contact"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button 
+                        onClick={() => handleDelete(p.id)}
+                        className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Delete Contact"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 text-sm text-stone-500 mt-1">
+                    <span className="flex items-center gap-1.5 bg-stone-50 px-2 py-1 rounded w-fit"><MapPin className="h-3.5 w-3.5 text-stone-400" /> {p.property_location}</span>
+                    <span className="flex items-center gap-1.5 bg-stone-50 px-2 py-1 rounded w-fit"><Phone className="h-3.5 w-3.5 text-stone-400" /> {p.phone || 'No phone'}</span>
                   </div>
                 </div>
                 
-                <div className="flex gap-2 w-full md:w-auto">
+                <div className="w-full md:w-auto mt-2 md:mt-0">
                   <button 
                     onClick={() => generateContract(p)}
-                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-stone-100 text-stone-700 hover:bg-stone-200 rounded-lg border border-stone-300 font-medium text-sm transition-colors"
+                    className="w-full md:w-auto flex items-center justify-center gap-2 px-4 py-2 bg-stone-50 text-stone-700 hover:bg-stone-200 hover:text-stone-900 rounded-lg border border-stone-200 font-medium text-sm transition-all"
                   >
-                    <FileCheck className="h-4 w-4" />
-                    Download Permission Slip
+                    <FileCheck className="h-4 w-4 text-emerald-600" />
+                    <span className="whitespace-nowrap">Permission Slip</span>
                   </button>
                 </div>
               </div>
@@ -153,27 +253,41 @@ export default function LandownersPage() {
           )}
         </div>
 
-        {/* MODAL */}
+        {/* CREATE / EDIT MODAL */}
         {isModalOpen && (
-          <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-              <h2 className="text-xl font-bold text-stone-800 mb-4">Add Landowner</h2>
+          <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95 duration-200">
+              <div className="flex justify-between items-center mb-5">
+                <h2 className="text-xl font-bold text-emerald-900 flex items-center gap-2">
+                  <Tractor className="h-5 w-5" />
+                  {isEditing ? 'Edit Landowner' : 'Add Landowner'}
+                </h2>
+                {isEditing && <span className="text-xs bg-amber-100 text-amber-800 font-bold px-2 py-1 rounded-full">EDIT MODE</span>}
+              </div>
+              
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Name</label>
-                  <input className="w-full border p-2 rounded" value={name} onChange={e => setName(e.target.value)} placeholder="John Smith" />
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Full Name</label>
+                  <input className="w-full border border-stone-300 p-2.5 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. John Smith" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Phone</label>
-                  <input className="w-full border p-2 rounded" value={phone} onChange={e => setPhone(e.target.value)} placeholder="555-1234" />
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Phone Number</label>
+                  <input className="w-full border border-stone-300 p-2.5 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" value={phone} onChange={e => setPhone(e.target.value)} placeholder="e.g. 555-123-4567" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Location / Lot Number</label>
-                  <input className="w-full border p-2 rounded" value={location} onChange={e => setLocation(e.target.value)} placeholder="Lot 4, Concession 9" />
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Property Location / Lot</label>
+                  <input className="w-full border border-stone-300 p-2.5 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all" value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. Lot 4, Concession 9" />
                 </div>
-                <div className="flex justify-end gap-2 mt-6">
-                  <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-stone-500">Cancel</button>
-                  <button onClick={handleAdd} className="px-4 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700">Save</button>
+                
+                <div className="flex justify-end gap-3 mt-8 pt-4 border-t border-stone-100">
+                  <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-stone-500 font-medium hover:bg-stone-100 rounded-lg transition-colors">Cancel</button>
+                  <button 
+                    onClick={handleSave} 
+                    disabled={!name || !location}
+                    className="px-6 py-2 bg-emerald-600 text-white rounded-lg font-bold hover:bg-emerald-700 disabled:bg-stone-300 disabled:cursor-not-allowed transition-colors shadow-sm"
+                  >
+                    {isEditing ? 'Save Changes' : 'Add Contact'}
+                  </button>
                 </div>
               </div>
             </div>

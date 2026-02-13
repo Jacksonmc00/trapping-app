@@ -21,6 +21,13 @@ const ONTARIO_DISTRICTS = [
   "Timmins", "Wawa"
 ]
 
+// OFFICIAL ONTARIO FURBEARERS (Alphabetical)
+const ONTARIO_FURBEARERS = [
+  "Beaver", "Black Bear", "Bobcat", "Coyote", "Fisher", "Fox", "Lynx", 
+  "Marten", "Mink", "Muskrat", "Opossum", "Otter", "Raccoon", 
+  "Red Squirrel", "Skunk", "Weasel", "Wolf", "Wolverine"
+]
+
 export default function Dashboard() {
   const [areas, setAreas] = useState<any[]>([])
   const [logs, setLogs] = useState<any[]>([])
@@ -85,7 +92,6 @@ export default function Dashboard() {
     getLogs()
   }, [selectedArea, supabase])
 
-  // --- FIXED: SAVE AREA ---
   const handleSaveArea = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
@@ -110,7 +116,6 @@ export default function Dashboard() {
         return true
     }
 
-    // Execute exactly ONCE
     const executingPromise = savePromiseFn();
 
     toast.promise(executingPromise, {
@@ -120,7 +125,7 @@ export default function Dashboard() {
     })
 
     try {
-        await executingPromise; // Wait for the single execution to finish
+        await executingPromise; 
         setIsAreaModalOpen(false)
         setNewAreaName('')
         const data = await refreshAreas()
@@ -132,11 +137,9 @@ export default function Dashboard() {
              setSelectedArea(data[data.length - 1])
         }
     } catch (e) {
-        // Handled by toast
     }
   }
 
-  // --- FIXED: HANDLE DELETE ---
   const handleDeleteArea = async (e: any, id: string) => {
     e.stopPropagation()
     if (!confirm('Are you sure? This will delete the area and ALL its harvest logs.')) return
@@ -147,7 +150,6 @@ export default function Dashboard() {
         if (error) throw error
     }
 
-    // Execute exactly ONCE
     const executingPromise = deletePromiseFn();
 
     toast.promise(executingPromise, {
@@ -157,7 +159,7 @@ export default function Dashboard() {
     })
 
     try {
-        await executingPromise; // Wait for the single execution
+        await executingPromise; 
         const data = await refreshAreas()
         if (selectedArea?.id === id) {
             setSelectedArea(data && data.length > 0 ? data[0] : null)
@@ -184,7 +186,6 @@ export default function Dashboard() {
     setIsAreaModalOpen(true)
   }
 
-  // --- FIXED: LOG HARVEST ---
   const handleLogHarvest = async () => {
     if (!selectedArea) return
 
@@ -198,7 +199,6 @@ export default function Dashboard() {
         if (error) throw new Error(error.message)
     }
 
-    // Execute exactly ONCE
     const executingPromise = logPromiseFn();
 
     toast.promise(executingPromise, {
@@ -208,12 +208,11 @@ export default function Dashboard() {
     })
 
     try {
-        await executingPromise; // Wait for the single execution
+        await executingPromise;
         setIsLogModalOpen(false)
         const { data } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
         setLogs(data || [])
     } catch (e) {
-        // Handled by toast
     }
   }
 
@@ -360,7 +359,7 @@ export default function Dashboard() {
                       {logs.map((log) => (
                         <div key={log.id} className="px-6 py-4 flex items-center justify-between hover:bg-stone-50 transition-colors">
                           <div className="flex items-center gap-4">
-                            <div className={`h-10 w-10 rounded-full flex items-center justify-center text-white font-bold shadow-sm ${['Beaver', 'Muskrat'].includes(log.species) ? 'bg-amber-700' : 'bg-stone-600'}`}>{log.species.charAt(0)}</div>
+                            <div className={`h-10 w-10 rounded-full flex items-center justify-center text-white font-bold shadow-sm ${['Beaver', 'Muskrat', 'Mink', 'Otter'].includes(log.species) ? 'bg-amber-700' : 'bg-stone-600'}`}>{log.species.charAt(0)}</div>
                             <div><p className="font-bold text-stone-800">{log.species}</p><p className="text-xs text-stone-500">{log.sex} • {selectedArea.district}</p></div>
                           </div>
                           <div className="text-right"><p className="text-sm font-medium text-stone-600">{new Date(log.date_harvested).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</p></div>
@@ -381,20 +380,21 @@ export default function Dashboard() {
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Species</label>
-                  <select value={species} onChange={e => setSpecies(e.target.value)} className="w-full border p-2 rounded">
-                    <option>Beaver</option><option>Marten</option><option>Fisher</option><option>Otter</option>
-                    <option>Wolf</option><option>Coyote</option><option>Muskrat</option><option>Raccoon</option>
+                  <select value={species} onChange={e => setSpecies(e.target.value)} className="w-full border p-2 rounded bg-white">
+                    {ONTARIO_FURBEARERS.map(f => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
                   </select>
                 </div>
                 <div>
                     <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Sex</label>
-                    <select value={sex} onChange={e => setSex(e.target.value)} className="w-full border p-2 rounded">
+                    <select value={sex} onChange={e => setSex(e.target.value)} className="w-full border p-2 rounded bg-white">
                         <option>Male</option><option>Female</option><option>Unknown</option>
                     </select>
                 </div>
                 <div className="flex justify-end gap-2 mt-6">
-                  <button onClick={() => setIsLogModalOpen(false)} className="px-4 py-2 text-stone-500">Cancel</button>
-                  <button onClick={handleLogHarvest} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700">Save</button>
+                  <button onClick={() => setIsLogModalOpen(false)} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded transition-colors">Cancel</button>
+                  <button onClick={handleLogHarvest} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700 transition-colors">Save</button>
                 </div>
               </div>
             </div>
@@ -411,11 +411,11 @@ export default function Dashboard() {
               <div className="space-y-4">
                 <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">Area Name</label><input className="w-full border p-2 rounded" placeholder="e.g. South Bush Line" value={newAreaName} onChange={e => setNewAreaName(e.target.value)} /></div>
                 <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">MNRF District</label><select className="w-full border p-2 rounded bg-white" value={newAreaDistrict} onChange={e => setNewAreaDistrict(e.target.value)}>{ONTARIO_DISTRICTS.map(d => (<option key={d} value={d}>{d}</option>))}</select></div>
-                <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">Type</label><select value={newAreaType} onChange={e => setNewAreaType(e.target.value)} className="w-full border p-2 rounded"><option>Registered Line</option><option>Private Land</option></select></div>
+                <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">Type</label><select value={newAreaType} onChange={e => setNewAreaType(e.target.value)} className="w-full border p-2 rounded bg-white"><option>Registered Line</option><option>Private Land</option></select></div>
                 <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">License # (From Wallet)</label>{userLicenses.length > 0 ? (<select className="w-full border p-2 rounded bg-white" value={newAreaLicense} onChange={e => setNewAreaLicense(e.target.value)}>{userLicenses.map((lic, i) => (<option key={i} value={lic}>{lic}</option>))}</select>) : (<div className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-200">No licenses found. Go to <strong>ID Wallet</strong> to add them first.</div>)}</div>
                 <div className="flex justify-end gap-2 mt-6">
-                  <button onClick={() => setIsAreaModalOpen(false)} className="px-4 py-2 text-stone-500">Cancel</button>
-                  <button onClick={handleSaveArea} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700">{isEditingArea ? 'Save Changes' : 'Create Area'}</button>
+                  <button onClick={() => setIsAreaModalOpen(false)} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded transition-colors">Cancel</button>
+                  <button onClick={handleSaveArea} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700 transition-colors">{isEditingArea ? 'Save Changes' : 'Create Area'}</button>
                 </div>
               </div>
             </div>

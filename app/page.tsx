@@ -16,8 +16,20 @@ import {
   Leaf,
   LogOut,
   Map as MapIcon,
-  User
+  User,
+  Trash2,
+  Pencil
 } from 'lucide-react'
+
+// OFFICIAL MNRF DISTRICTS
+const ONTARIO_DISTRICTS = [
+  "Algonquin Park", "Aylmer", "Bancroft", "Chapleau", "Cochrane", 
+  "Dryden", "Fort Frances", "Geraldton", "Guelph", "Hearst", 
+  "Kemptville", "Kenora", "Kirkland Lake", "Midhurst", "Nipigon", 
+  "North Bay", "Parry Sound", "Pembroke", "Peterborough", "Red Lake", 
+  "Sault Ste. Marie", "Sioux Lookout", "Sudbury", "Thunder Bay", 
+  "Timmins", "Wawa"
+]
 
 export default function Dashboard() {
   const [areas, setAreas] = useState<any[]>([])
@@ -25,24 +37,36 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [selectedArea, setSelectedArea] = useState<any>(null)
   
+  // User Data for Dropdowns
+  const [userLicenses, setUserLicenses] = useState<string[]>([])
+
   // Modals State
   const [isLogModalOpen, setIsLogModalOpen] = useState(false)
   const [isAreaModalOpen, setIsAreaModalOpen] = useState(false)
+  const [isEditingArea, setIsEditingArea] = useState(false)
   
   // Log Form
   const [species, setSpecies] = useState('Beaver')
   const [sex, setSex] = useState('Male')
 
   // Area Form
+  const [areaId, setAreaId] = useState('')
   const [newAreaName, setNewAreaName] = useState('')
-  const [newAreaDistrict, setNewAreaDistrict] = useState('')
+  const [newAreaDistrict, setNewAreaDistrict] = useState('Pembroke') // Default
   const [newAreaType, setNewAreaType] = useState('Registered Line')
   const [newAreaLicense, setNewAreaLicense] = useState('')
 
   const supabase = createClient()
   const router = useRouter()
 
-  // 1. Fetch Areas
+  // Helper to refresh area list
+  const refreshAreas = async () => {
+    const { data } = await supabase.from('operating_areas').select('*').order('created_at', { ascending: true })
+    setAreas(data || [])
+    return data
+  }
+
+  // 1. Fetch User Data & Areas
   useEffect(() => {
     const getData = async () => {
       const { data: { user } } = await supabase.auth.getUser()
@@ -51,18 +75,34 @@ export default function Dashboard() {
         return
       }
 
-      const { data } = await supabase.from('operating_areas').select('*').order('created_at', { ascending: true })
-      setAreas(data || [])
+      // A. Fetch Licenses from Profile
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('trapping_license')
+        .eq('id', user.id)
+        .single()
+      
+      if (profile && profile.trapping_license) {
+        // Split string "T-123,T-456" into array
+        const list = profile.trapping_license.split(',').filter((l: string) => l.trim() !== '')
+        setUserLicenses(list)
+        if (list.length > 0) setNewAreaLicense(list[0]) // Default to first license
+      }
+
+      // B. Fetch Areas
+      const areaData = await refreshAreas()
       setLoading(false)
-      // Auto-select first area if exists and none selected
-      if (data && data.length > 0 && !selectedArea) setSelectedArea(data[0])
+      if (areaData && areaData.length > 0 && !selectedArea) setSelectedArea(areaData[0])
     }
     getData()
-  }, [router, supabase, selectedArea])
+  }, [router, supabase]) // Removed selectedArea dependency to prevent loops
 
-  // 2. Fetch Logs
+  // 2. Fetch Logs when Area Changes
   useEffect(() => {
-    if (!selectedArea) return
+    if (!selectedArea) {
+      setLogs([])
+      return
+    }
     const getLogs = async () => {
       const { data } = await supabase
         .from('harvest_logs')
@@ -74,32 +114,87 @@ export default function Dashboard() {
     getLogs()
   }, [selectedArea, supabase])
 
-  // 3. Handle Create Area
-  const handleCreateArea = async () => {
+  // 3. Handle Save Area (Create or Update)
+  const handleSaveArea = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
-    const { error } = await supabase.from('operating_areas').insert({
-      user_id: user.id, // Explicitly link to user
+    let error
+
+    const payload = {
       name: newAreaName,
       district: newAreaDistrict,
       type: newAreaType,
       license_number: newAreaLicense
-    })
+    }
+
+    if (isEditingArea) {
+      const res = await supabase.from('operating_areas').update(payload).eq('id', areaId)
+      error = res.error
+    } else {
+      const res = await supabase.from('operating_areas').insert({
+        user_id: user.id,
+        ...payload
+      })
+      error = res.error
+    }
 
     if (error) {
       alert(error.message)
     } else {
       setIsAreaModalOpen(false)
-      setNewAreaName(''); setNewAreaDistrict(''); setNewAreaLicense('')
-      // Refresh list
-      const { data } = await supabase.from('operating_areas').select('*').order('created_at', { ascending: true })
-      setAreas(data || [])
-      if (data && data.length > 0) setSelectedArea(data[data.length - 1]) // Select the new one
+      setNewAreaName('')
+      // Don't reset District/License so it's easier to add multiple
+      const data = await refreshAreas()
+      
+      if (isEditingArea && selectedArea?.id === areaId) {
+         const updated = data?.find(a => a.id === areaId)
+         setSelectedArea(updated)
+      } else if (!isEditingArea && data) {
+         setSelectedArea(data[data.length - 1])
+      }
     }
   }
 
-  // 4. Handle Harvest Log
+  // 4. Handle Delete
+  const handleDeleteArea = async (e: any, id: string) => {
+    e.stopPropagation()
+    if (!confirm('Are you sure? This will delete the area and ALL its harvest logs.')) return
+
+    await supabase.from('harvest_logs').delete().eq('operating_area_id', id)
+    const { error } = await supabase.from('operating_areas').delete().eq('id', id)
+    
+    if (error) {
+      alert('Error deleting area')
+    } else {
+      const data = await refreshAreas()
+      if (selectedArea?.id === id) {
+        setSelectedArea(data && data.length > 0 ? data[0] : null)
+      }
+    }
+  }
+
+  // 5. Open Edit Modal
+  const openEditModal = (e: any, area: any) => {
+    e.stopPropagation()
+    setIsEditingArea(true)
+    setAreaId(area.id)
+    setNewAreaName(area.name)
+    setNewAreaDistrict(area.district)
+    setNewAreaType(area.type)
+    setNewAreaLicense(area.license_number || '')
+    setIsAreaModalOpen(true)
+  }
+
+  // 6. Open Create Modal
+  const openCreateModal = () => {
+    setIsEditingArea(false)
+    setNewAreaName('')
+    // Keep District/License default or last used
+    setIsAreaModalOpen(true)
+  }
+
+  // 7. Log Harvest
   const handleLogHarvest = async () => {
     if (!selectedArea) return
 
@@ -123,7 +218,7 @@ export default function Dashboard() {
     }
   }
 
-  // 5. Generate PDF Report
+  // 8. Generate PDF
   const generatePDF = () => {
     if (!selectedArea) return;
     const doc = new jsPDF();
@@ -175,7 +270,6 @@ export default function Dashboard() {
           </div>
           
           <div className="flex items-center gap-3">
-             {/* PROFILE BUTTON */}
              <button 
               onClick={() => router.push('/profile')}
               className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-800 border border-emerald-700 hover:bg-emerald-700 transition-all text-xs font-medium"
@@ -184,7 +278,6 @@ export default function Dashboard() {
               <span>ID Wallet</span>
             </button>
 
-            {/* LOGOUT BUTTON */}
             <button 
               onClick={async () => { await supabase.auth.signOut(); router.push('/login') }}
               className="p-2 text-emerald-300 hover:text-white transition-colors"
@@ -250,13 +343,13 @@ export default function Dashboard() {
           <div className="lg:col-span-4 space-y-4">
             <div className="flex justify-between items-center">
               <h2 className="text-sm font-bold text-stone-400 uppercase tracking-wider">Operating Areas</h2>
-              <button onClick={() => setIsAreaModalOpen(true)} className="text-xs text-emerald-600 font-bold hover:underline">+ NEW</button>
+              <button onClick={openCreateModal} className="text-xs text-emerald-600 font-bold hover:underline">+ NEW</button>
             </div>
             
             {loading ? (
               <div className="bg-white h-32 rounded-xl shadow-sm animate-pulse" />
             ) : areas.length === 0 ? (
-                <div onClick={() => setIsAreaModalOpen(true)} className="bg-white p-6 rounded-xl border-2 border-dashed border-stone-300 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition-all">
+                <div onClick={openCreateModal} className="bg-white p-6 rounded-xl border-2 border-dashed border-stone-300 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition-all">
                     <Plus className="h-8 w-8 mx-auto text-emerald-300 mb-2" />
                     <p className="text-stone-500 text-sm font-bold">Add Your First Area</p>
                     <p className="text-xs text-stone-400 mt-1">Click here to setup a Trap Line or Property</p>
@@ -284,7 +377,23 @@ export default function Dashboard() {
                         {area.type === 'Private Land' ? <Tractor className="h-3 w-3" /> : <MapPin className="h-3 w-3" />}
                         {area.district}
                       </div>
-                      {selectedArea?.id === area.id && <div className="h-2 w-2 rounded-full bg-emerald-500" />}
+                      
+                      <div className="flex items-center gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
+                         <button 
+                           onClick={(e) => openEditModal(e, area)}
+                           className="p-1.5 text-stone-400 hover:text-emerald-600 hover:bg-stone-100 rounded"
+                           title="Edit Area"
+                         >
+                            <Pencil className="h-3.5 w-3.5" />
+                         </button>
+                         <button 
+                           onClick={(e) => handleDeleteArea(e, area.id)}
+                           className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-100 rounded"
+                           title="Delete Area"
+                         >
+                            <Trash2 className="h-3.5 w-3.5" />
+                         </button>
+                      </div>
                     </div>
                     
                     <h3 className={`font-bold text-lg mb-1 ${selectedArea?.id === area.id ? 'text-emerald-900' : 'text-stone-700'}`}>
@@ -409,33 +518,72 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* CREATE AREA MODAL */}
+        {/* CREATE / EDIT AREA MODAL */}
         {isAreaModalOpen && (
           <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">
-              <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-900"><MapIcon className="h-5 w-5" /> Add Operating Area</h2>
+              <div className="flex justify-between items-center mb-4">
+                 <h2 className="text-xl font-bold flex items-center gap-2 text-emerald-900">
+                   <MapIcon className="h-5 w-5" /> 
+                   {isEditingArea ? 'Edit Operating Area' : 'Add Operating Area'}
+                 </h2>
+                 {isEditingArea && (
+                   <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full font-bold">EDIT MODE</span>
+                 )}
+              </div>
+              
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Area Name</label>
                   <input className="w-full border p-2 rounded" placeholder="e.g. South Bush Line" value={newAreaName} onChange={e => setNewAreaName(e.target.value)} />
                 </div>
+                
+                {/* DISTRICT DROPDOWN */}
                 <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">District / Town</label>
-                  <input className="w-full border p-2 rounded" placeholder="e.g. Pembroke" value={newAreaDistrict} onChange={e => setNewAreaDistrict(e.target.value)} />
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">MNRF District</label>
+                  <select 
+                    className="w-full border p-2 rounded bg-white" 
+                    value={newAreaDistrict} 
+                    onChange={e => setNewAreaDistrict(e.target.value)}
+                  >
+                    {ONTARIO_DISTRICTS.map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
                 </div>
+
                 <div>
                     <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Type</label>
                     <select value={newAreaType} onChange={e => setNewAreaType(e.target.value)} className="w-full border p-2 rounded">
                         <option>Registered Line</option><option>Private Land</option>
                     </select>
                 </div>
+                
+                {/* LICENSE DROPDOWN */}
                 <div>
-                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">License # (Optional)</label>
-                  <input className="w-full border p-2 rounded" placeholder="T-12345" value={newAreaLicense} onChange={e => setNewAreaLicense(e.target.value)} />
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">License # (From Wallet)</label>
+                  {userLicenses.length > 0 ? (
+                    <select 
+                      className="w-full border p-2 rounded bg-white" 
+                      value={newAreaLicense} 
+                      onChange={e => setNewAreaLicense(e.target.value)}
+                    >
+                      {userLicenses.map((lic, i) => (
+                        <option key={i} value={lic}>{lic}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-200">
+                      No licenses found. Go to <strong>ID Wallet</strong> to add them first.
+                    </div>
+                  )}
                 </div>
+
                 <div className="flex justify-end gap-2 mt-6">
                   <button onClick={() => setIsAreaModalOpen(false)} className="px-4 py-2 text-stone-500">Cancel</button>
-                  <button onClick={handleCreateArea} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700">Create Area</button>
+                  <button onClick={handleSaveArea} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700">
+                    {isEditingArea ? 'Save Changes' : 'Create Area'}
+                  </button>
                 </div>
               </div>
             </div>

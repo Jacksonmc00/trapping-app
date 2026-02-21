@@ -8,7 +8,7 @@ import autoTable from 'jspdf-autotable'
 import toast from 'react-hot-toast'
 import { 
   Trees, FileText, Plus, MapPin, Calendar, PawPrint, Tractor, Leaf, 
-  LogOut, Map as MapIcon, User, Trash2, Pencil
+  LogOut, Map as MapIcon, User, Trash2, Pencil, Package
 } from 'lucide-react'
 
 // OFFICIAL MNRF DISTRICTS
@@ -58,7 +58,7 @@ export default function Dashboard() {
     return data
   }
 
-  // --- FIXED: Force Fresh License Fetch ---
+  // Force Fresh License Fetch
   const fetchProfileLicenses = async (userId: string) => {
     const { data: profile } = await supabase.from('profiles').select('trapping_license').eq('id', userId).single()
     if (profile && profile.trapping_license) {
@@ -179,7 +179,7 @@ export default function Dashboard() {
     }
   }
 
-  // --- FIXED: Fetch fresh data on click ---
+  // Fetch fresh data on Edit Modal click
   const openEditModal = async (e: any, area: any) => {
     e.stopPropagation()
     setIsEditingArea(true)
@@ -195,7 +195,7 @@ export default function Dashboard() {
     setIsAreaModalOpen(true)
   }
 
-  // --- FIXED: Fetch fresh data on click ---
+  // Fetch fresh data on Create Modal click
   const openCreateModal = async () => {
     setIsEditingArea(false)
     setNewAreaName('')
@@ -293,6 +293,10 @@ export default function Dashboard() {
             <button onClick={() => router.push('/landowners')} className="flex items-center gap-2 px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-900 transition-all shadow-sm">
               <Tractor className="h-4 w-4" />
               <span className="hidden md:inline">CRM</span>
+            </button>
+            <button onClick={() => router.push('/inventory')} className="flex items-center gap-2 px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-900 transition-all shadow-sm">
+              <Package className="h-4 w-4" />
+              <span className="hidden md:inline">Trap Shed</span>
             </button>
             <button onClick={generatePDF} disabled={!selectedArea || logs.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all border ${!selectedArea || logs.length === 0 ? 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed' : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50 hover:shadow-sm'}`}>
               <FileText className="h-4 w-4" />

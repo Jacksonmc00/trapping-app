@@ -3,15 +3,25 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import toast from 'react-hot-toast'
 import { 
   Trees, FileText, Plus, MapPin, Calendar, PawPrint, Tractor, Leaf, 
-  LogOut, Map as MapIcon, User, Trash2, Pencil, Package
+  LogOut, Map as MapIcon, User, Trash2, Pencil, Package, Navigation
 } from 'lucide-react'
 
-// OFFICIAL MNRF DISTRICTS
+// Load map dynamically to prevent Next.js server crashes
+const TrapMap = dynamic(() => import('./components/TrapMap'), { 
+  ssr: false,
+  loading: () => (
+    <div className="h-[500px] w-full bg-stone-200 animate-pulse rounded-xl flex items-center justify-center text-stone-500 font-medium shadow-inner border border-stone-300">
+      <MapPin className="h-6 w-6 mr-2 opacity-50 animate-bounce" /> Loading Satellite Imagery...
+    </div>
+  )
+})
+
 const ONTARIO_DISTRICTS = [
   "Algonquin Park", "Aylmer", "Bancroft", "Chapleau", "Cochrane", 
   "Dryden", "Fort Frances", "Geraldton", "Guelph", "Hearst", 
@@ -21,7 +31,6 @@ const ONTARIO_DISTRICTS = [
   "Timmins", "Wawa"
 ]
 
-// OFFICIAL ONTARIO FURBEARERS (Alphabetical)
 const ONTARIO_FURBEARERS = [
   "Beaver", "Black Bear", "Bobcat", "Coyote", "Fisher", "Fox", "Lynx", 
   "Marten", "Mink", "Muskrat", "Opossum", "Otter", "Raccoon", 
@@ -31,6 +40,8 @@ const ONTARIO_FURBEARERS = [
 export default function Dashboard() {
   const [areas, setAreas] = useState<any[]>([])
   const [logs, setLogs] = useState<any[]>([])
+  const [deployments, setDeployments] = useState<any[]>([])
+  const [inventory, setInventory] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedArea, setSelectedArea] = useState<any>(null)
   
@@ -38,11 +49,17 @@ export default function Dashboard() {
 
   const [isLogModalOpen, setIsLogModalOpen] = useState(false)
   const [isAreaModalOpen, setIsAreaModalOpen] = useState(false)
+  const [isDeployModalOpen, setIsDeployModalOpen] = useState(false)
   const [isEditingArea, setIsEditingArea] = useState(false)
   
+  // Harvest State
   const [species, setSpecies] = useState('Beaver')
   const [sex, setSex] = useState('Male')
 
+  // Deploy State
+  const [selectedTrapId, setSelectedTrapId] = useState('')
+
+  // Area State
   const [areaId, setAreaId] = useState('')
   const [newAreaName, setNewAreaName] = useState('')
   const [newAreaDistrict, setNewAreaDistrict] = useState('Pembroke')
@@ -58,7 +75,6 @@ export default function Dashboard() {
     return data
   }
 
-  // Force Fresh License Fetch
   const fetchProfileLicenses = async (userId: string) => {
     const { data: profile } = await supabase.from('profiles').select('trapping_license').eq('id', userId).single()
     if (profile && profile.trapping_license) {
@@ -79,7 +95,6 @@ export default function Dashboard() {
         return
       }
 
-      // Initial load
       const list = await fetchProfileLicenses(user.id)
       if (list.length > 0) setNewAreaLicense(list[0])
 
@@ -90,157 +105,157 @@ export default function Dashboard() {
     getData()
   }, [router, supabase])
 
+  // Fetch Logs AND Deployments whenever you click an Operating Area
   useEffect(() => {
     if (!selectedArea) {
-      setLogs([])
+      setLogs([]); setDeployments([]);
       return
     }
-    const getLogs = async () => {
-      const { data } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
-      setLogs(data || [])
+    const getAreaDetails = async () => {
+      // Get Harvest Logs
+      const { data: logData } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
+      setLogs(logData || [])
+
+      // Get Map Pins (Deployments)
+      const { data: depData } = await supabase.from('trap_deployments').select('*, trap_inventory(model, category)').eq('operating_area_id', selectedArea.id).order('deployed_at', { ascending: false })
+      setDeployments(depData || [])
     }
-    getLogs()
+    getAreaDetails()
   }, [selectedArea, supabase])
+
+  const openDeployModal = async () => {
+    const { data } = await supabase.from('trap_inventory').select('*').order('model', { ascending: true })
+    setInventory(data || [])
+    if (data && data.length > 0) setSelectedTrapId(data[0].id)
+    setIsDeployModalOpen(true)
+  }
+
+  const handleDeployTrap = async () => {
+    if (!selectedArea || !selectedTrapId) return
+
+    const deployPromiseFn = async () => {
+      // 1. Get GPS Coordinates from phone
+      const position: any = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true })
+      }).catch(() => { throw new Error("Could not get GPS location. Please allow location access.") })
+
+      const lat = position.coords.latitude
+      const lng = position.coords.longitude
+
+      // 2. Save to Database
+      const { data: { user } } = await supabase.auth.getUser()
+      const { error } = await supabase.from('trap_deployments').insert({
+        user_id: user?.id,
+        operating_area_id: selectedArea.id,
+        inventory_id: selectedTrapId,
+        latitude: lat,
+        longitude: lng,
+        status: 'Set'
+      })
+
+      if (error) throw new Error(error.message)
+      return true
+    }
+
+    const executingPromise = deployPromiseFn()
+
+    toast.promise(executingPromise, {
+      loading: 'Getting GPS and dropping pin...',
+      success: 'Trap deployed on map!',
+      error: (err) => `Error: ${err.message}`
+    })
+
+    try {
+      await executingPromise
+      setIsDeployModalOpen(false)
+      // Refresh pins
+      const { data: depData } = await supabase.from('trap_deployments').select('*, trap_inventory(model, category)').eq('operating_area_id', selectedArea.id).order('deployed_at', { ascending: false })
+      setDeployments(depData || [])
+    } catch (e) { }
+  }
+
+  const handlePullTrap = async (deploymentId: string) => {
+    if (!confirm('Are you sure you want to pull this trap and remove it from the map?')) return
+
+    const pullPromiseFn = async () => {
+      const { error } = await supabase.from('trap_deployments').delete().eq('id', deploymentId)
+      if (error) throw new Error(error.message)
+      return true
+    }
+
+    const executingPromise = pullPromiseFn()
+
+    toast.promise(executingPromise, {
+      loading: 'Removing pin...',
+      success: 'Trap pulled and returned to shed!',
+      error: 'Failed to pull trap'
+    })
+
+    try {
+      await executingPromise
+      // Refresh the map pins instantly
+      const { data: depData } = await supabase.from('trap_deployments').select('*, trap_inventory(model, category)').eq('operating_area_id', selectedArea.id).order('deployed_at', { ascending: false })
+      setDeployments(depData || [])
+    } catch (e) { }
+  }
 
   const handleSaveArea = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-
-    const payload = {
-      name: newAreaName,
-      district: newAreaDistrict,
-      type: newAreaType,
-      license_number: newAreaLicense
-    }
-
+    const payload = { name: newAreaName, district: newAreaDistrict, type: newAreaType, license_number: newAreaLicense }
     const savePromiseFn = async () => {
         let error;
-        if (isEditingArea) {
-             const res = await supabase.from('operating_areas').update(payload).eq('id', areaId)
-             error = res.error
-        } else {
-             const res = await supabase.from('operating_areas').insert({ user_id: user.id, ...payload })
-             error = res.error
-        }
+        if (isEditingArea) { const res = await supabase.from('operating_areas').update(payload).eq('id', areaId); error = res.error } 
+        else { const res = await supabase.from('operating_areas').insert({ user_id: user.id, ...payload }); error = res.error }
         if (error) throw new Error(error.message) 
         return true
     }
-
     const executingPromise = savePromiseFn();
-
-    toast.promise(executingPromise, {
-      loading: 'Saving area...',
-      success: 'Area saved successfully!',
-      error: (err) => `Error: ${err.message}`,
-    })
-
+    toast.promise(executingPromise, { loading: 'Saving area...', success: 'Area saved successfully!', error: (err) => `Error: ${err.message}` })
     try {
-        await executingPromise; 
-        setIsAreaModalOpen(false)
-        setNewAreaName('')
-        const data = await refreshAreas()
-        
-        if (isEditingArea && selectedArea?.id === areaId) {
-             const updated = data?.find(a => a.id === areaId)
-             setSelectedArea(updated)
-        } else if (!isEditingArea && data) {
-             setSelectedArea(data[data.length - 1])
-        }
-    } catch (e) {
-    }
+        await executingPromise; setIsAreaModalOpen(false); setNewAreaName(''); const data = await refreshAreas()
+        if (isEditingArea && selectedArea?.id === areaId) setSelectedArea(data?.find(a => a.id === areaId))
+        else if (!isEditingArea && data) setSelectedArea(data[data.length - 1])
+    } catch (e) { }
   }
 
   const handleDeleteArea = async (e: any, id: string) => {
     e.stopPropagation()
-    if (!confirm('Are you sure? This will delete the area and ALL its harvest logs.')) return
-
+    if (!confirm('Are you sure? This will delete the area, its pins, and ALL logs.')) return
     const deletePromiseFn = async () => {
+        await supabase.from('trap_deployments').delete().eq('operating_area_id', id)
         await supabase.from('harvest_logs').delete().eq('operating_area_id', id)
         const { error } = await supabase.from('operating_areas').delete().eq('id', id)
         if (error) throw error
     }
-
     const executingPromise = deletePromiseFn();
-
-    toast.promise(executingPromise, {
-        loading: 'Deleting...',
-        success: 'Area deleted',
-        error: 'Could not delete area'
-    })
-
-    try {
-        await executingPromise; 
-        const data = await refreshAreas()
-        if (selectedArea?.id === id) {
-            setSelectedArea(data && data.length > 0 ? data[0] : null)
-        }
-    } catch (err) {
-        console.error(err)
-    }
+    toast.promise(executingPromise, { loading: 'Deleting...', success: 'Area deleted', error: 'Could not delete area' })
+    try { await executingPromise; const data = await refreshAreas(); if (selectedArea?.id === id) setSelectedArea(data && data.length > 0 ? data[0] : null) } catch (err) { }
   }
 
-  // Fetch fresh data on Edit Modal click
   const openEditModal = async (e: any, area: any) => {
-    e.stopPropagation()
-    setIsEditingArea(true)
-    setAreaId(area.id)
-    setNewAreaName(area.name)
-    setNewAreaDistrict(area.district)
-    setNewAreaType(area.type)
-    
+    e.stopPropagation(); setIsEditingArea(true); setAreaId(area.id); setNewAreaName(area.name); setNewAreaDistrict(area.district); setNewAreaType(area.type);
     const { data: { user } } = await supabase.auth.getUser()
     if (user) await fetchProfileLicenses(user.id)
-
-    setNewAreaLicense(area.license_number || '')
-    setIsAreaModalOpen(true)
+    setNewAreaLicense(area.license_number || ''); setIsAreaModalOpen(true)
   }
 
-  // Fetch fresh data on Create Modal click
   const openCreateModal = async () => {
-    setIsEditingArea(false)
-    setNewAreaName('')
-    
+    setIsEditingArea(false); setNewAreaName('')
     const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-        const freshLicenses = await fetchProfileLicenses(user.id)
-        if (freshLicenses.length > 0) {
-            setNewAreaLicense(freshLicenses[0])
-        } else {
-            setNewAreaLicense('')
-        }
-    }
-    
+    if (user) { const freshLicenses = await fetchProfileLicenses(user.id); if (freshLicenses.length > 0) setNewAreaLicense(freshLicenses[0]); else setNewAreaLicense('') }
     setIsAreaModalOpen(true)
   }
 
   const handleLogHarvest = async () => {
     if (!selectedArea) return
-
     const logPromiseFn = async () => {
-        const { error } = await supabase.from('harvest_logs').insert({
-            operating_area_id: selectedArea.id,
-            species: species,
-            sex: sex,
-            date_harvested: new Date().toISOString(),
-        })
+        const { error } = await supabase.from('harvest_logs').insert({ operating_area_id: selectedArea.id, species: species, sex: sex, date_harvested: new Date().toISOString() })
         if (error) throw new Error(error.message)
     }
-
     const executingPromise = logPromiseFn();
-
-    toast.promise(executingPromise, {
-        loading: 'Logging catch...',
-        success: `${species} logged!`,
-        error: 'Failed to log'
-    })
-
-    try {
-        await executingPromise;
-        setIsLogModalOpen(false)
-        const { data } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
-        setLogs(data || [])
-    } catch (e) {
-    }
+    toast.promise(executingPromise, { loading: 'Logging catch...', success: `${species} logged!`, error: 'Failed to log' })
+    try { await executingPromise; setIsLogModalOpen(false); const { data } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false }); setLogs(data || []) } catch (e) { }
   }
 
   const generatePDF = () => {
@@ -267,11 +282,9 @@ export default function Dashboard() {
             <Trees className="h-6 w-6 text-emerald-400" />
             <span className="font-bold text-lg tracking-tight">TraplineOS</span>
           </div>
-          
           <div className="flex items-center gap-3">
              <button onClick={() => router.push('/profile')} className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-800 border border-emerald-700 hover:bg-emerald-700 transition-all text-xs font-medium">
-              <User className="h-3 w-3" />
-              <span>ID Wallet</span>
+              <User className="h-3 w-3" /><span>ID Wallet</span>
             </button>
             <button onClick={async () => { await supabase.auth.signOut(); router.push('/login') }} className="p-2 text-emerald-300 hover:text-white transition-colors" title="Sign Out">
               <LogOut className="h-5 w-5" />
@@ -290,27 +303,24 @@ export default function Dashboard() {
           </div>
           
           <div className="flex gap-3 flex-wrap">
-            <button onClick={() => router.push('/landowners')} className="flex items-center gap-2 px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-900 transition-all shadow-sm">
-              <Tractor className="h-4 w-4" />
-              <span className="hidden md:inline">CRM</span>
-            </button>
             <button onClick={() => router.push('/inventory')} className="flex items-center gap-2 px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-900 transition-all shadow-sm">
-              <Package className="h-4 w-4" />
-              <span className="hidden md:inline">Trap Shed</span>
+              <Package className="h-4 w-4" /><span className="hidden md:inline">Trap Shed</span>
             </button>
             <button onClick={generatePDF} disabled={!selectedArea || logs.length === 0} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all border ${!selectedArea || logs.length === 0 ? 'bg-stone-100 text-stone-400 border-stone-200 cursor-not-allowed' : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50 hover:shadow-sm'}`}>
-              <FileText className="h-4 w-4" />
-              <span className="hidden md:inline">Report</span>
+              <FileText className="h-4 w-4" /><span className="hidden md:inline">Report</span>
             </button>
-            <button onClick={() => setIsLogModalOpen(true)} disabled={!selectedArea} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white shadow-sm transition-all ${!selectedArea ? 'bg-stone-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 hover:shadow-md active:transform active:scale-95'}`}>
-              <Plus className="h-4 w-4" />
-              Log Harvest
+            
+            <button onClick={openDeployModal} disabled={!selectedArea} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-emerald-900 shadow-sm transition-all ${!selectedArea ? 'bg-stone-300 cursor-not-allowed' : 'bg-emerald-200 hover:bg-emerald-300 active:scale-95'}`}>
+              <Navigation className="h-4 w-4" /> Deploy Trap
+            </button>
+
+            <button onClick={() => setIsLogModalOpen(true)} disabled={!selectedArea} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white shadow-sm transition-all ${!selectedArea ? 'bg-stone-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 hover:shadow-md active:scale-95'}`}>
+              <Plus className="h-4 w-4" /> Log Harvest
             </button>
           </div>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-          
           {/* LEFT COLUMN: Areas */}
           <div className="lg:col-span-4 space-y-4">
             <div className="flex justify-between items-center">
@@ -333,8 +343,7 @@ export default function Dashboard() {
                     {selectedArea?.id === area.id && (<div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-500" />)}
                     <div className="flex justify-between items-start mb-1">
                       <div className="flex items-center gap-2 text-stone-500 text-xs font-semibold uppercase">
-                        {area.type === 'Private Land' ? <Tractor className="h-3 w-3" /> : <MapPin className="h-3 w-3" />}
-                        {area.district}
+                        {area.type === 'Private Land' ? <Tractor className="h-3 w-3" /> : <MapPin className="h-3 w-3" />}{area.district}
                       </div>
                       <div className="flex items-center gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
                          <button onClick={(e) => openEditModal(e, area)} className="p-1.5 text-stone-400 hover:text-emerald-600 hover:bg-stone-100 rounded" title="Edit Area"><Pencil className="h-3.5 w-3.5" /></button>
@@ -349,7 +358,7 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* RIGHT COLUMN: Stats & Logs */}
+          {/* RIGHT COLUMN: Stats, MAP, & Logs */}
           <div className="lg:col-span-8">
             {!selectedArea ? (
               <div className="h-full min-h-[400px] flex flex-col items-center justify-center bg-stone-200/50 rounded-2xl border-2 border-dashed border-stone-300 text-stone-400">
@@ -359,19 +368,24 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-6 animate-in fade-in duration-300">
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 col-span-2 md:col-span-1">
                     <p className="text-xs text-stone-500 font-medium mb-1">Total Harvest</p>
                     <p className="text-3xl font-bold text-stone-800">{logs.length}</p>
                   </div>
-                  <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200">
+                  <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 col-span-2 md:col-span-1">
                     <p className="text-xs text-stone-500 font-medium mb-1">Top Species</p>
                     <p className="text-lg font-bold text-stone-800 truncate">{logs.length > 0 ? logs[0].species : '-'}</p>
                   </div>
-                  <div className="bg-white p-4 rounded-xl shadow-sm border border-stone-200 col-span-2 md:col-span-1">
-                    <p className="text-xs text-stone-500 font-medium mb-1">Last Active</p>
-                    <p className="text-sm font-semibold text-stone-700">{logs.length > 0 ? new Date(logs[0].date_harvested).toLocaleDateString() : 'No Activity'}</p>
+                  <div className="bg-white p-4 rounded-xl shadow-sm border border-emerald-200 bg-emerald-50 col-span-2 md:col-span-2">
+                    <p className="text-xs text-emerald-600 font-bold mb-1 flex items-center gap-1"><Navigation className="h-3 w-3"/> Active Sets</p>
+                    <p className="text-2xl font-black text-emerald-900">{deployments.length}</p>
                   </div>
+                </div>
+
+                {/* THE MAP SECTION */}
+                <div className="bg-white p-2 rounded-xl shadow-sm border border-stone-200 z-0 relative">
+                  <TrapMap deployments={deployments} onPullTrap={handlePullTrap} />
                 </div>
 
                 <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
@@ -404,6 +418,45 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* DEPLOY TRAP MODAL */}
+        {isDeployModalOpen && (
+          <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-900"><Navigation className="h-5 w-5" /> Deploy Trap Here</h2>
+              
+              {inventory.length === 0 ? (
+                <div className="bg-red-50 text-red-600 p-4 rounded-lg text-sm mb-4">
+                  You have no traps in your Trap Shed! Go add some inventory first.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-sm text-stone-500 mb-4">This will grab your current GPS coordinates and drop a pin on the map for the selected trap.</p>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Select Trap from Shed</label>
+                    <select value={selectedTrapId} onChange={e => setSelectedTrapId(e.target.value)} className="w-full border p-2.5 rounded-lg bg-white outline-none focus:ring-2 focus:ring-emerald-500">
+                      {inventory.map(item => (
+                        <option key={item.id} value={item.id}>{item.model} (Owned: {item.total_quantity})</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+              
+              <div className="flex justify-end gap-2 mt-8 pt-4 border-t border-stone-100">
+                <button onClick={() => setIsDeployModalOpen(false)} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded transition-colors">Cancel</button>
+                <button 
+                  onClick={handleDeployTrap} 
+                  disabled={inventory.length === 0}
+                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold hover:bg-emerald-700 transition-colors disabled:bg-stone-300 flex items-center gap-2"
+                >
+                  <MapPin className="h-4 w-4" /> Drop Pin
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* HARVEST MODAL */}
         {isLogModalOpen && (
           <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">
@@ -412,9 +465,7 @@ export default function Dashboard() {
                 <div>
                   <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Species</label>
                   <select value={species} onChange={e => setSpecies(e.target.value)} className="w-full border p-2 rounded bg-white">
-                    {ONTARIO_FURBEARERS.map(f => (
-                      <option key={f} value={f}>{f}</option>
-                    ))}
+                    {ONTARIO_FURBEARERS.map(f => (<option key={f} value={f}>{f}</option>))}
                   </select>
                 </div>
                 <div>
@@ -432,6 +483,7 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* AREA MODAL */}
         {isAreaModalOpen && (
           <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">

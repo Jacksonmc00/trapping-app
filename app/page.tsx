@@ -58,6 +58,19 @@ export default function Dashboard() {
     return data
   }
 
+  // --- FIXED: Force Fresh License Fetch ---
+  const fetchProfileLicenses = async (userId: string) => {
+    const { data: profile } = await supabase.from('profiles').select('trapping_license').eq('id', userId).single()
+    if (profile && profile.trapping_license) {
+      const list = profile.trapping_license.split(',').filter((l: string) => l.trim() !== '')
+      setUserLicenses(list)
+      return list
+    } else {
+      setUserLicenses([])
+      return []
+    }
+  }
+
   useEffect(() => {
     const getData = async () => {
       const { data: { user } } = await supabase.auth.getUser()
@@ -66,12 +79,9 @@ export default function Dashboard() {
         return
       }
 
-      const { data: profile } = await supabase.from('profiles').select('trapping_license').eq('id', user.id).single()
-      if (profile && profile.trapping_license) {
-        const list = profile.trapping_license.split(',').filter((l: string) => l.trim() !== '')
-        setUserLicenses(list)
-        if (list.length > 0) setNewAreaLicense(list[0])
-      }
+      // Initial load
+      const list = await fetchProfileLicenses(user.id)
+      if (list.length > 0) setNewAreaLicense(list[0])
 
       const areaData = await refreshAreas()
       setLoading(false)
@@ -169,20 +179,37 @@ export default function Dashboard() {
     }
   }
 
-  const openEditModal = (e: any, area: any) => {
+  // --- FIXED: Fetch fresh data on click ---
+  const openEditModal = async (e: any, area: any) => {
     e.stopPropagation()
     setIsEditingArea(true)
     setAreaId(area.id)
     setNewAreaName(area.name)
     setNewAreaDistrict(area.district)
     setNewAreaType(area.type)
+    
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) await fetchProfileLicenses(user.id)
+
     setNewAreaLicense(area.license_number || '')
     setIsAreaModalOpen(true)
   }
 
-  const openCreateModal = () => {
+  // --- FIXED: Fetch fresh data on click ---
+  const openCreateModal = async () => {
     setIsEditingArea(false)
     setNewAreaName('')
+    
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+        const freshLicenses = await fetchProfileLicenses(user.id)
+        if (freshLicenses.length > 0) {
+            setNewAreaLicense(freshLicenses[0])
+        } else {
+            setNewAreaLicense('')
+        }
+    }
+    
     setIsAreaModalOpen(true)
   }
 

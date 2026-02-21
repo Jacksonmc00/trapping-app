@@ -1,6 +1,6 @@
 'use client'
 
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useState, useEffect } from 'react'
@@ -15,8 +15,26 @@ const defaultIcon = L.icon({
   shadowSize: [41, 41]
 });
 
-// NEW: We added `onPullTrap` so the map knows how to talk back to the dashboard!
-export default function TrapMap({ deployments = [], onPullTrap }: { deployments: any[], onPullTrap: (id: string) => void }) {
+// NEW: A silent component that just listens for clicks on the map
+function ClickListener({ onClick }: { onClick: (lat: number, lng: number) => void }) {
+  useMapEvents({
+    click(e) {
+      onClick(e.latlng.lat, e.latlng.lng)
+    }
+  })
+  return null
+}
+
+// NEW: Added `onMapClick` to our props
+export default function TrapMap({ 
+  deployments = [], 
+  onPullTrap, 
+  onMapClick 
+}: { 
+  deployments: any[], 
+  onPullTrap: (id: string) => void,
+  onMapClick: (lat: number, lng: number) => void 
+}) {
   const defaultCenter: [number, number] = [45.256, -75.358];
   const [mapKey, setMapKey] = useState<string>('')
 
@@ -38,12 +56,15 @@ export default function TrapMap({ deployments = [], onPullTrap }: { deployments:
     : defaultCenter;
 
   return (
-    <div style={{ height: '500px', width: '100%' }} className="rounded-xl overflow-hidden border border-stone-200 z-0 relative shadow-sm">
+    <div style={{ height: '500px', width: '100%' }} className="rounded-xl overflow-hidden border border-stone-200 z-0 relative shadow-sm cursor-crosshair">
       <MapContainer key={mapKey} center={mapCenter} zoom={13} style={{ height: '100%', width: '100%' }}>
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+        
+        {/* NEW: We drop the ClickListener into the map */}
+        <ClickListener onClick={onMapClick} />
         
         {deployments.map((dep) => (
           <Marker key={dep.id} position={[dep.latitude, dep.longitude]} icon={defaultIcon}>
@@ -58,11 +79,9 @@ export default function TrapMap({ deployments = [], onPullTrap }: { deployments:
                   <span className="text-stone-500 text-xs block mb-3">
                     Deployed: {new Date(dep.deployed_at).toLocaleDateString()}
                   </span>
-                  
-                  {/* NEW: THE PULL BUTTON */}
                   <button 
                     onClick={(e) => {
-                      e.stopPropagation(); // Stops the map from registering a random click
+                      e.stopPropagation();
                       onPullTrap(dep.id);
                     }}
                     className="w-full bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 py-1.5 px-2 rounded-md text-xs font-bold transition-colors"

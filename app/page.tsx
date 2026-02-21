@@ -9,10 +9,10 @@ import autoTable from 'jspdf-autotable'
 import toast from 'react-hot-toast'
 import { 
   Trees, FileText, Plus, MapPin, Calendar, PawPrint, Tractor, Leaf, 
-  LogOut, Map as MapIcon, User, Trash2, Pencil, Package, Navigation
+  LogOut, Map as MapIcon, User, Trash2, Pencil, Package, Navigation, MousePointerClick
 } from 'lucide-react'
 
-// Load map dynamically to prevent Next.js server crashes
+// Load map dynamically
 const TrapMap = dynamic(() => import('./components/TrapMap'), { 
   ssr: false,
   loading: () => (
@@ -58,6 +58,7 @@ export default function Dashboard() {
 
   // Deploy State
   const [selectedTrapId, setSelectedTrapId] = useState('')
+  const [manualCoords, setManualCoords] = useState<{lat: number, lng: number} | null>(null) // NEW: Remembers where you clicked
 
   // Area State
   const [areaId, setAreaId] = useState('')
@@ -105,44 +106,64 @@ export default function Dashboard() {
     getData()
   }, [router, supabase])
 
-  // Fetch Logs AND Deployments whenever you click an Operating Area
   useEffect(() => {
     if (!selectedArea) {
       setLogs([]); setDeployments([]);
       return
     }
     const getAreaDetails = async () => {
-      // Get Harvest Logs
       const { data: logData } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
       setLogs(logData || [])
 
-      // Get Map Pins (Deployments)
       const { data: depData } = await supabase.from('trap_deployments').select('*, trap_inventory(model, category)').eq('operating_area_id', selectedArea.id).order('deployed_at', { ascending: false })
       setDeployments(depData || [])
     }
     getAreaDetails()
   }, [selectedArea, supabase])
 
-  const openDeployModal = async () => {
+  // --- NEW: Handle Manual Map Clicks ---
+  const handleMapClick = async (lat: number, lng: number) => {
+    if (!selectedArea) {
+      toast.error('Select an Operating Area first!')
+      return
+    }
+    setManualCoords({ lat, lng }) // Save the clicked location
+    
     const { data } = await supabase.from('trap_inventory').select('*').order('model', { ascending: true })
     setInventory(data || [])
     if (data && data.length > 0) setSelectedTrapId(data[0].id)
     setIsDeployModalOpen(true)
   }
 
+  // --- UPDATE: GPS Button ---
+  const openDeployModal = async () => {
+    setManualCoords(null) // Erase manual coords so it forces GPS!
+    const { data } = await supabase.from('trap_inventory').select('*').order('model', { ascending: true })
+    setInventory(data || [])
+    if (data && data.length > 0) setSelectedTrapId(data[0].id)
+    setIsDeployModalOpen(true)
+  }
+
+  // --- UPDATE: Deployment Logic ---
   const handleDeployTrap = async () => {
     if (!selectedArea || !selectedTrapId) return
 
     const deployPromiseFn = async () => {
-      // 1. Get GPS Coordinates from phone
-      const position: any = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true })
-      }).catch(() => { throw new Error("Could not get GPS location. Please allow location access.") })
+      let lat = 0;
+      let lng = 0;
 
-      const lat = position.coords.latitude
-      const lng = position.coords.longitude
+      // Check if we clicked the map, or used the GPS button
+      if (manualCoords) {
+        lat = manualCoords.lat;
+        lng = manualCoords.lng;
+      } else {
+        const position: any = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true })
+        }).catch(() => { throw new Error("Could not get GPS location. Check your browser permissions.") })
+        lat = position.coords.latitude
+        lng = position.coords.longitude
+      }
 
-      // 2. Save to Database
       const { data: { user } } = await supabase.auth.getUser()
       const { error } = await supabase.from('trap_deployments').insert({
         user_id: user?.id,
@@ -160,7 +181,7 @@ export default function Dashboard() {
     const executingPromise = deployPromiseFn()
 
     toast.promise(executingPromise, {
-      loading: 'Getting GPS and dropping pin...',
+      loading: 'Dropping pin...',
       success: 'Trap deployed on map!',
       error: (err) => `Error: ${err.message}`
     })
@@ -168,7 +189,7 @@ export default function Dashboard() {
     try {
       await executingPromise
       setIsDeployModalOpen(false)
-      // Refresh pins
+      setManualCoords(null) // Reset after success
       const { data: depData } = await supabase.from('trap_deployments').select('*, trap_inventory(model, category)').eq('operating_area_id', selectedArea.id).order('deployed_at', { ascending: false })
       setDeployments(depData || [])
     } catch (e) { }
@@ -176,24 +197,14 @@ export default function Dashboard() {
 
   const handlePullTrap = async (deploymentId: string) => {
     if (!confirm('Are you sure you want to pull this trap and remove it from the map?')) return
-
     const pullPromiseFn = async () => {
       const { error } = await supabase.from('trap_deployments').delete().eq('id', deploymentId)
-      if (error) throw new Error(error.message)
-      return true
+      if (error) throw new Error(error.message); return true
     }
-
     const executingPromise = pullPromiseFn()
-
-    toast.promise(executingPromise, {
-      loading: 'Removing pin...',
-      success: 'Trap pulled and returned to shed!',
-      error: 'Failed to pull trap'
-    })
-
+    toast.promise(executingPromise, { loading: 'Removing pin...', success: 'Trap pulled and returned to shed!', error: 'Failed to pull trap' })
     try {
       await executingPromise
-      // Refresh the map pins instantly
       const { data: depData } = await supabase.from('trap_deployments').select('*, trap_inventory(model, category)').eq('operating_area_id', selectedArea.id).order('deployed_at', { ascending: false })
       setDeployments(depData || [])
     } catch (e) { }
@@ -310,8 +321,8 @@ export default function Dashboard() {
               <FileText className="h-4 w-4" /><span className="hidden md:inline">Report</span>
             </button>
             
-            <button onClick={openDeployModal} disabled={!selectedArea} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-emerald-900 shadow-sm transition-all ${!selectedArea ? 'bg-stone-300 cursor-not-allowed' : 'bg-emerald-200 hover:bg-emerald-300 active:scale-95'}`}>
-              <Navigation className="h-4 w-4" /> Deploy Trap
+            <button onClick={openDeployModal} disabled={!selectedArea} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-emerald-900 shadow-sm transition-all ${!selectedArea ? 'bg-stone-300 cursor-not-allowed' : 'bg-emerald-200 hover:bg-emerald-300 active:scale-95'}`} title="Use phone GPS to drop pin">
+              <Navigation className="h-4 w-4" /> Deploy Trap (GPS)
             </button>
 
             <button onClick={() => setIsLogModalOpen(true)} disabled={!selectedArea} className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white shadow-sm transition-all ${!selectedArea ? 'bg-stone-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 hover:shadow-md active:scale-95'}`}>
@@ -385,7 +396,11 @@ export default function Dashboard() {
 
                 {/* THE MAP SECTION */}
                 <div className="bg-white p-2 rounded-xl shadow-sm border border-stone-200 z-0 relative">
-                  <TrapMap deployments={deployments} onPullTrap={handlePullTrap} />
+                  <div className="absolute top-4 right-4 z-[400] bg-white/90 backdrop-blur text-xs font-bold text-stone-500 px-3 py-1.5 rounded-lg shadow-sm pointer-events-none">
+                    Click anywhere on map to manual deploy
+                  </div>
+                  {/* NEW: Passed the handleMapClick down to the map component */}
+                  <TrapMap deployments={deployments} onPullTrap={handlePullTrap} onMapClick={handleMapClick} />
                 </div>
 
                 <div className="bg-white rounded-xl shadow-sm border border-stone-200 overflow-hidden">
@@ -422,7 +437,13 @@ export default function Dashboard() {
         {isDeployModalOpen && (
           <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">
-              <h2 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-900"><Navigation className="h-5 w-5" /> Deploy Trap Here</h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold flex items-center gap-2 text-emerald-900">
+                  {manualCoords ? <MousePointerClick className="h-5 w-5" /> : <Navigation className="h-5 w-5" />} 
+                  Deploy Trap
+                </h2>
+                <button onClick={() => { setIsDeployModalOpen(false); setManualCoords(null); }} className="text-stone-400 hover:text-stone-600 text-xl font-bold">&times;</button>
+              </div>
               
               {inventory.length === 0 ? (
                 <div className="bg-red-50 text-red-600 p-4 rounded-lg text-sm mb-4">
@@ -430,9 +451,21 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <p className="text-sm text-stone-500 mb-4">This will grab your current GPS coordinates and drop a pin on the map for the selected trap.</p>
+                  {/* NEW: Dynamic visual feedback so you know how it's getting your location */}
+                  {manualCoords ? (
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800 flex flex-col gap-1">
+                      <span className="font-bold">📍 Using Selected Map Location</span>
+                      <span className="text-xs opacity-75 font-mono">Lat: {manualCoords.lat.toFixed(5)}, Lng: {manualCoords.lng.toFixed(5)}</span>
+                    </div>
+                  ) : (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800 flex items-center gap-2">
+                      <Navigation className="h-4 w-4 animate-pulse" />
+                      <span className="font-bold">Using Current Phone GPS Location</span>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Select Trap from Shed</label>
+                    <label className="block text-xs font-bold text-stone-500 uppercase mb-1 mt-2">Select Trap from Shed</label>
                     <select value={selectedTrapId} onChange={e => setSelectedTrapId(e.target.value)} className="w-full border p-2.5 rounded-lg bg-white outline-none focus:ring-2 focus:ring-emerald-500">
                       {inventory.map(item => (
                         <option key={item.id} value={item.id}>{item.model} (Owned: {item.total_quantity})</option>
@@ -443,7 +476,7 @@ export default function Dashboard() {
               )}
               
               <div className="flex justify-end gap-2 mt-8 pt-4 border-t border-stone-100">
-                <button onClick={() => setIsDeployModalOpen(false)} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded transition-colors">Cancel</button>
+                <button onClick={() => { setIsDeployModalOpen(false); setManualCoords(null); }} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded transition-colors">Cancel</button>
                 <button 
                   onClick={handleDeployTrap} 
                   disabled={inventory.length === 0}

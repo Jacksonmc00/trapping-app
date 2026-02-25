@@ -6,9 +6,23 @@ import { Toaster } from 'react-hot-toast';
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://traplineos.com"),
   title: "TraplineOS",
   description: "Professional Fur Harvest Management",
   manifest: "/manifest.json", 
+  openGraph: {
+    title: "TraplineOS",
+    description: "Professional Fur Harvest Management",
+    url: "https://traplineos.com",
+    siteName: "TraplineOS",
+    locale: "en_CA",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "TraplineOS",
+    description: "Professional Fur Harvest Management",
+  },
 };
 
 export const viewport: Viewport = {

@@ -15,7 +15,7 @@ const defaultIcon = L.icon({
   shadowSize: [41, 41]
 });
 
-// NEW: A silent component that just listens for clicks on the map
+// A silent component that just listens for clicks on the map
 function ClickListener({ onClick }: { onClick: (lat: number, lng: number) => void }) {
   useMapEvents({
     click(e) {
@@ -25,7 +25,6 @@ function ClickListener({ onClick }: { onClick: (lat: number, lng: number) => voi
   return null
 }
 
-// NEW: Added `onMapClick` to our props
 export default function TrapMap({ 
   deployments = [], 
   onPullTrap, 
@@ -35,7 +34,8 @@ export default function TrapMap({
   onPullTrap: (id: string) => void,
   onMapClick: (lat: number, lng: number) => void 
 }) {
-  const defaultCenter: [number, number] = [45.256, -75.358];
+  // Sets the default camera roughly over the Ottawa valley, but places NO pins.
+  const defaultCenter: [number, number] = [45.4215, -75.6972];
   const [mapKey, setMapKey] = useState<string>('')
 
   useEffect(() => {
@@ -51,19 +51,19 @@ export default function TrapMap({
     )
   }
 
+  // If there are traps, center the camera on the most recent one. Otherwise, look at Ottawa.
   const mapCenter = deployments.length > 0 
     ? [deployments[0].latitude, deployments[0].longitude] as [number, number]
     : defaultCenter;
 
   return (
     <div style={{ height: '500px', width: '100%' }} className="rounded-xl overflow-hidden border border-stone-200 z-0 relative shadow-sm cursor-crosshair">
-      <MapContainer key={mapKey} center={mapCenter} zoom={13} style={{ height: '100%', width: '100%' }}>
+      <MapContainer key={mapKey} center={mapCenter} zoom={11} style={{ height: '100%', width: '100%' }}>
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         
-        {/* NEW: We drop the ClickListener into the map */}
         <ClickListener onClick={onMapClick} />
         
         {deployments.map((dep) => (
@@ -92,17 +92,6 @@ export default function TrapMap({
             </Popup>
           </Marker>
         ))}
-
-        {deployments.length === 0 && (
-          <Marker position={defaultCenter} icon={defaultIcon}>
-            <Popup>
-              <div className="text-center">
-                  <strong className="text-emerald-800 font-bold block mb-1">Home Base</strong>
-                  <span className="text-stone-500 text-xs">Drop your first pin!</span>
-              </div>
-            </Popup>
-          </Marker>
-        )}
       </MapContainer>
     </div>
   )

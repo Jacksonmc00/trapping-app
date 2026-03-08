@@ -9,7 +9,8 @@ import autoTable from 'jspdf-autotable'
 import toast from 'react-hot-toast'
 import { 
   Trees, FileText, Plus, MapPin, Calendar, PawPrint, Tractor, Leaf, 
-  LogOut, Map as MapIcon, User, Trash2, Pencil, Package, Navigation, MousePointerClick
+  LogOut, Map as MapIcon, User, Trash2, Pencil, Package, Navigation, 
+  MousePointerClick, HelpCircle, ArrowRight, ShieldCheck
 } from 'lucide-react'
 
 // Load map dynamically
@@ -42,6 +43,7 @@ export default function Dashboard() {
   const [logs, setLogs] = useState<any[]>([])
   const [deployments, setDeployments] = useState<any[]>([])
   const [inventory, setInventory] = useState<any[]>([])
+  const [landowners, setLandowners] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedArea, setSelectedArea] = useState<any>(null)
   
@@ -51,6 +53,7 @@ export default function Dashboard() {
   const [isAreaModalOpen, setIsAreaModalOpen] = useState(false)
   const [isDeployModalOpen, setIsDeployModalOpen] = useState(false)
   const [isEditingArea, setIsEditingArea] = useState(false)
+  const [isWelcomeModalOpen, setIsWelcomeModalOpen] = useState(false) // NEW
   
   // Harvest State
   const [species, setSpecies] = useState('Beaver')
@@ -58,7 +61,7 @@ export default function Dashboard() {
 
   // Deploy State
   const [selectedTrapId, setSelectedTrapId] = useState('')
-  const [manualCoords, setManualCoords] = useState<{lat: number, lng: number} | null>(null) // NEW: Remembers where you clicked
+  const [manualCoords, setManualCoords] = useState<{lat: number, lng: number} | null>(null)
 
   // Area State
   const [areaId, setAreaId] = useState('')
@@ -66,14 +69,30 @@ export default function Dashboard() {
   const [newAreaDistrict, setNewAreaDistrict] = useState('Pembroke')
   const [newAreaType, setNewAreaType] = useState('Registered Line')
   const [newAreaLicense, setNewAreaLicense] = useState('')
+  const [newAreaLandowner, setNewAreaLandowner] = useState('') 
 
   const supabase = createClient()
   const router = useRouter()
 
+  // WELCOME GUIDE LOGIC
+  useEffect(() => {
+    const hasSeenWelcome = localStorage.getItem('trapline_has_seen_welcome')
+    if (!hasSeenWelcome) {
+      setIsWelcomeModalOpen(true)
+      localStorage.setItem('trapline_has_seen_welcome', 'true')
+    }
+  }, [])
+
   const refreshAreas = async () => {
-    const { data } = await supabase.from('operating_areas').select('*').order('created_at', { ascending: true })
+    const { data } = await supabase.from('operating_areas').select('*, landowners(first_name, last_name)').order('created_at', { ascending: true })
     setAreas(data || [])
     return data
+  }
+
+  const fetchLandowners = async () => {
+    const { data } = await supabase.from('landowners').select('*').order('last_name', { ascending: true })
+    setLandowners(data || [])
+    if (data && data.length > 0) setNewAreaLandowner(data[0].id)
   }
 
   const fetchProfileLicenses = async (userId: string) => {
@@ -82,23 +101,20 @@ export default function Dashboard() {
       const list = profile.trapping_license.split(',').filter((l: string) => l.trim() !== '')
       setUserLicenses(list)
       return list
-    } else {
-      setUserLicenses([])
-      return []
     }
+    setUserLicenses([])
+    return []
   }
 
   useEffect(() => {
     const getData = async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) {
-        router.push('/login')
-        return
-      }
+      if (!user) { router.push('/login'); return }
 
       const list = await fetchProfileLicenses(user.id)
       if (list.length > 0) setNewAreaLicense(list[0])
 
+      await fetchLandowners()
       const areaData = await refreshAreas()
       setLoading(false)
       if (areaData && areaData.length > 0 && !selectedArea) setSelectedArea(areaData[0])
@@ -107,89 +123,51 @@ export default function Dashboard() {
   }, [router, supabase])
 
   useEffect(() => {
-    if (!selectedArea) {
-      setLogs([]); setDeployments([]);
-      return
-    }
+    if (!selectedArea) { setLogs([]); setDeployments([]); return }
     const getAreaDetails = async () => {
       const { data: logData } = await supabase.from('harvest_logs').select('*').eq('operating_area_id', selectedArea.id).order('created_at', { ascending: false })
       setLogs(logData || [])
-
       const { data: depData } = await supabase.from('trap_deployments').select('*, trap_inventory(model, category)').eq('operating_area_id', selectedArea.id).order('deployed_at', { ascending: false })
       setDeployments(depData || [])
     }
     getAreaDetails()
   }, [selectedArea, supabase])
 
-  // --- NEW: Handle Manual Map Clicks ---
   const handleMapClick = async (lat: number, lng: number) => {
-    if (!selectedArea) {
-      toast.error('Select an Operating Area first!')
-      return
-    }
-    setManualCoords({ lat, lng }) // Save the clicked location
-    
+    if (!selectedArea) { toast.error('Select an Operating Area first!'); return }
+    setManualCoords({ lat, lng })
     const { data } = await supabase.from('trap_inventory').select('*').order('model', { ascending: true })
     setInventory(data || [])
     if (data && data.length > 0) setSelectedTrapId(data[0].id)
     setIsDeployModalOpen(true)
   }
 
-  // --- UPDATE: GPS Button ---
   const openDeployModal = async () => {
-    setManualCoords(null) // Erase manual coords so it forces GPS!
+    setManualCoords(null)
     const { data } = await supabase.from('trap_inventory').select('*').order('model', { ascending: true })
     setInventory(data || [])
     if (data && data.length > 0) setSelectedTrapId(data[0].id)
     setIsDeployModalOpen(true)
   }
 
-  // --- UPDATE: Deployment Logic ---
   const handleDeployTrap = async () => {
     if (!selectedArea || !selectedTrapId) return
-
     const deployPromiseFn = async () => {
-      let lat = 0;
-      let lng = 0;
-
-      // Check if we clicked the map, or used the GPS button
-      if (manualCoords) {
-        lat = manualCoords.lat;
-        lng = manualCoords.lng;
-      } else {
-        const position: any = await new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true })
-        }).catch(() => { throw new Error("Could not get GPS location. Check your browser permissions.") })
-        lat = position.coords.latitude
-        lng = position.coords.longitude
+      let lat = 0, lng = 0
+      if (manualCoords) { lat = manualCoords.lat; lng = manualCoords.lng } 
+      else {
+        const position: any = await new Promise((resolve, reject) => { navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true }) }).catch(() => { throw new Error("Could not get GPS location. Check your browser permissions.") })
+        lat = position.coords.latitude; lng = position.coords.longitude
       }
-
       const { data: { user } } = await supabase.auth.getUser()
-      const { error } = await supabase.from('trap_deployments').insert({
-        user_id: user?.id,
-        operating_area_id: selectedArea.id,
-        inventory_id: selectedTrapId,
-        latitude: lat,
-        longitude: lng,
-        status: 'Set'
-      })
-
+      const { error } = await supabase.from('trap_deployments').insert({ user_id: user?.id, operating_area_id: selectedArea.id, inventory_id: selectedTrapId, latitude: lat, longitude: lng, status: 'Set' })
       if (error) throw new Error(error.message)
       return true
     }
-
     const executingPromise = deployPromiseFn()
-
-    toast.promise(executingPromise, {
-      loading: 'Dropping pin...',
-      success: 'Trap deployed on map!',
-      error: (err) => `Error: ${err.message}`
-    })
-
+    toast.promise(executingPromise, { loading: 'Dropping pin...', success: 'Trap deployed on map!', error: (err) => `Error: ${err.message}` })
     try {
-      await executingPromise
-      setIsDeployModalOpen(false)
-      setManualCoords(null) // Reset after success
+      await executingPromise; setIsDeployModalOpen(false); setManualCoords(null)
       const { data: depData } = await supabase.from('trap_deployments').select('*, trap_inventory(model, category)').eq('operating_area_id', selectedArea.id).order('deployed_at', { ascending: false })
       setDeployments(depData || [])
     } catch (e) { }
@@ -213,7 +191,15 @@ export default function Dashboard() {
   const handleSaveArea = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-    const payload = { name: newAreaName, district: newAreaDistrict, type: newAreaType, license_number: newAreaLicense }
+    
+    const payload = { 
+      name: newAreaName, 
+      district: newAreaDistrict, 
+      type: newAreaType, 
+      license_number: newAreaLicense,
+      landowner_id: newAreaType === 'Private Land' ? newAreaLandowner : null 
+    }
+
     const savePromiseFn = async () => {
         let error;
         if (isEditingArea) { const res = await supabase.from('operating_areas').update(payload).eq('id', areaId); error = res.error } 
@@ -245,14 +231,17 @@ export default function Dashboard() {
   }
 
   const openEditModal = async (e: any, area: any) => {
-    e.stopPropagation(); setIsEditingArea(true); setAreaId(area.id); setNewAreaName(area.name); setNewAreaDistrict(area.district); setNewAreaType(area.type);
+    e.stopPropagation(); setIsEditingArea(true); setAreaId(area.id); setNewAreaName(area.name); 
+    setNewAreaDistrict(area.district || 'Pembroke'); setNewAreaType(area.type); 
+    setNewAreaLandowner(area.landowner_id || (landowners.length > 0 ? landowners[0].id : ''));
     const { data: { user } } = await supabase.auth.getUser()
     if (user) await fetchProfileLicenses(user.id)
     setNewAreaLicense(area.license_number || ''); setIsAreaModalOpen(true)
   }
 
   const openCreateModal = async () => {
-    setIsEditingArea(false); setNewAreaName('')
+    setIsEditingArea(false); setNewAreaName(''); 
+    setNewAreaLandowner(landowners.length > 0 ? landowners[0].id : '');
     const { data: { user } } = await supabase.auth.getUser()
     if (user) { const freshLicenses = await fetchProfileLicenses(user.id); if (freshLicenses.length > 0) setNewAreaLicense(freshLicenses[0]); else setNewAreaLicense('') }
     setIsAreaModalOpen(true)
@@ -276,15 +265,16 @@ export default function Dashboard() {
     doc.setFontSize(22); doc.setTextColor(22, 101, 52); doc.text('ONTARIO FUR HARVEST REPORT', 14, 22);
     doc.setFontSize(10); doc.setTextColor(100); doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 14, 30);
     doc.setDrawColor(200); doc.line(14, 35, 196, 35); 
-    doc.setFontSize(12); doc.setTextColor(0); doc.text(`Operating Area: ${selectedArea.district} - ${selectedArea.name}`, 14, 45);
+    doc.setFontSize(12); doc.setTextColor(0); 
+    doc.text(`Operating Area: ${selectedArea.type === 'Private Land' ? 'Private Land' : selectedArea.district} - ${selectedArea.name}`, 14, 45);
     doc.text(`License: ${selectedArea.license_number || 'N/A'}`, 14, 52);
-    const tableRows = logs.map(log => [new Date(log.date_harvested).toLocaleDateString(), log.species, log.sex, selectedArea.district]);
+    const tableRows = logs.map(log => [new Date(log.date_harvested).toLocaleDateString(), log.species, log.sex, selectedArea.district || 'Private']);
     autoTable(doc, { head: [['Date', 'Species', 'Sex', 'WMU / District']], body: tableRows, startY: 60, theme: 'grid', headStyles: { fillColor: [22, 101, 52] }, styles: { fontSize: 10 } });
-    doc.save(`Harvest_Report_${selectedArea.district}_2026.pdf`);
+    doc.save(`Harvest_Report_${selectedArea.name}_2026.pdf`);
   };
 
   return (
-    <div className="min-h-screen bg-stone-100 text-stone-800 font-sans">
+    <div className="min-h-screen bg-stone-100 text-stone-800 font-sans relative">
       
       {/* NAVBAR */}
       <nav className="bg-emerald-900 text-white shadow-lg sticky top-0 z-10">
@@ -293,8 +283,11 @@ export default function Dashboard() {
             <Trees className="h-6 w-6 text-emerald-400" />
             <span className="font-bold text-lg tracking-tight">TraplineOS</span>
           </div>
-          <div className="flex items-center gap-3">
-             <button onClick={() => router.push('/profile')} className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-800 border border-emerald-700 hover:bg-emerald-700 transition-all text-xs font-medium">
+          <div className="flex items-center gap-1 md:gap-3">
+             <button onClick={() => setIsWelcomeModalOpen(true)} className="p-2 text-emerald-300 hover:text-white transition-colors" title="Getting Started Guide">
+              <HelpCircle className="h-5 w-5" />
+            </button>
+             <button onClick={() => router.push('/profile')} className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-800 border border-emerald-700 hover:bg-emerald-700 transition-all text-xs font-medium ml-1">
               <User className="h-3 w-3" /><span>ID Wallet</span>
             </button>
             <button onClick={async () => { await supabase.auth.signOut(); router.push('/login') }} className="p-2 text-emerald-300 hover:text-white transition-colors" title="Sign Out">
@@ -314,6 +307,10 @@ export default function Dashboard() {
           </div>
           
           <div className="flex gap-3 flex-wrap">
+            <button onClick={() => router.push('/landowners')} className="flex items-center gap-2 px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-900 transition-all shadow-sm">
+              <Tractor className="h-4 w-4" /><span className="hidden md:inline">CRM</span>
+            </button>
+
             <button onClick={() => router.push('/inventory')} className="flex items-center gap-2 px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-900 transition-all shadow-sm">
               <Package className="h-4 w-4" /><span className="hidden md:inline">Trap Shed</span>
             </button>
@@ -342,10 +339,10 @@ export default function Dashboard() {
             {loading ? (
               <div className="bg-white h-32 rounded-xl shadow-sm animate-pulse" />
             ) : areas.length === 0 ? (
-                <div onClick={openCreateModal} className="bg-white p-6 rounded-xl border-2 border-dashed border-stone-300 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition-all">
-                    <Plus className="h-8 w-8 mx-auto text-emerald-300 mb-2" />
-                    <p className="text-stone-500 text-sm font-bold">Add Your First Area</p>
-                    <p className="text-xs text-stone-400 mt-1">Click here to setup a Trap Line or Property</p>
+                <div onClick={() => setIsWelcomeModalOpen(true)} className="bg-white p-6 rounded-xl border-2 border-dashed border-stone-300 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition-all">
+                    <MapIcon className="h-8 w-8 mx-auto text-emerald-300 mb-2" />
+                    <p className="text-stone-500 text-sm font-bold">Getting Started</p>
+                    <p className="text-xs text-stone-400 mt-1">Click here to see the setup guide!</p>
                 </div>
             ) : (
               <div className="space-y-3">
@@ -353,9 +350,15 @@ export default function Dashboard() {
                   <div key={area.id} onClick={() => setSelectedArea(area)} className={`group relative p-4 rounded-xl border transition-all cursor-pointer overflow-hidden ${selectedArea?.id === area.id ? 'bg-white border-emerald-500 shadow-md ring-1 ring-emerald-500' : 'bg-white border-stone-200 hover:border-emerald-300 hover:shadow-sm'}`}>
                     {selectedArea?.id === area.id && (<div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-500" />)}
                     <div className="flex justify-between items-start mb-1">
+                      
                       <div className="flex items-center gap-2 text-stone-500 text-xs font-semibold uppercase">
-                        {area.type === 'Private Land' ? <Tractor className="h-3 w-3" /> : <MapPin className="h-3 w-3" />}{area.district}
+                        {area.type === 'Private Land' ? (
+                          <><Tractor className="h-3 w-3" /> {area.district} • {area.landowners ? `${area.landowners.first_name} ${area.landowners.last_name}` : 'Unknown Owner'}</>
+                        ) : (
+                          <><MapPin className="h-3 w-3" />{area.district}</>
+                        )}
                       </div>
+
                       <div className="flex items-center gap-1 opacity-100 lg:opacity-0 group-hover:opacity-100 transition-opacity">
                          <button onClick={(e) => openEditModal(e, area)} className="p-1.5 text-stone-400 hover:text-emerald-600 hover:bg-stone-100 rounded" title="Edit Area"><Pencil className="h-3.5 w-3.5" /></button>
                          <button onClick={(e) => handleDeleteArea(e, area.id)} className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-100 rounded" title="Delete Area"><Trash2 className="h-3.5 w-3.5" /></button>
@@ -399,7 +402,6 @@ export default function Dashboard() {
                   <div className="absolute top-4 right-4 z-[400] bg-white/90 backdrop-blur text-xs font-bold text-stone-500 px-3 py-1.5 rounded-lg shadow-sm pointer-events-none">
                     Click anywhere on map to manual deploy
                   </div>
-                  {/* NEW: Passed the handleMapClick down to the map component */}
                   <TrapMap deployments={deployments} onPullTrap={handlePullTrap} onMapClick={handleMapClick} />
                 </div>
 
@@ -420,7 +422,7 @@ export default function Dashboard() {
                         <div key={log.id} className="px-6 py-4 flex items-center justify-between hover:bg-stone-50 transition-colors">
                           <div className="flex items-center gap-4">
                             <div className={`h-10 w-10 rounded-full flex items-center justify-center text-white font-bold shadow-sm ${['Beaver', 'Muskrat', 'Mink', 'Otter'].includes(log.species) ? 'bg-amber-700' : 'bg-stone-600'}`}>{log.species.charAt(0)}</div>
-                            <div><p className="font-bold text-stone-800">{log.species}</p><p className="text-xs text-stone-500">{log.sex} • {selectedArea.district}</p></div>
+                            <div><p className="font-bold text-stone-800">{log.species}</p><p className="text-xs text-stone-500">{log.sex} • {selectedArea.district || 'Private Land'}</p></div>
                           </div>
                           <div className="text-right"><p className="text-sm font-medium text-stone-600">{new Date(log.date_harvested).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</p></div>
                         </div>
@@ -432,6 +434,54 @@ export default function Dashboard() {
             )}
           </div>
         </div>
+
+        {/* AREA MODAL */}
+        {isAreaModalOpen && (
+          <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">
+              <div className="flex justify-between items-center mb-4">
+                 <h2 className="text-xl font-bold flex items-center gap-2 text-emerald-900"><MapIcon className="h-5 w-5" /> {isEditingArea ? 'Edit Operating Area' : 'Add Operating Area'}</h2>
+                 {isEditingArea && (<span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full font-bold">EDIT MODE</span>)}
+              </div>
+              <div className="space-y-4">
+                <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">Area Name</label><input className="w-full border p-2 rounded" placeholder="e.g. South Bush Line" value={newAreaName} onChange={e => setNewAreaName(e.target.value)} /></div>
+                
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">Type</label>
+                  <select value={newAreaType} onChange={e => setNewAreaType(e.target.value)} className="w-full border p-2 rounded bg-white"><option>Registered Line</option><option>Private Land</option></select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-500 uppercase mb-1">MNRF District / WMU</label>
+                  <select className="w-full border p-2 rounded bg-white" value={newAreaDistrict} onChange={e => setNewAreaDistrict(e.target.value)}>{ONTARIO_DISTRICTS.map(d => (<option key={d} value={d}>{d}</option>))}</select>
+                </div>
+
+                {newAreaType === 'Private Land' && (
+                  <div>
+                    <label className="block text-xs font-bold text-stone-500 uppercase mb-1 flex justify-between">
+                      <span>Select Landowner</span>
+                      <button onClick={() => { setIsAreaModalOpen(false); router.push('/landowners') }} className="text-emerald-600 font-bold hover:underline normal-case">Manage CRM</button>
+                    </label>
+                    {landowners.length > 0 ? (
+                      <select className="w-full border p-2 rounded bg-white" value={newAreaLandowner} onChange={e => setNewAreaLandowner(e.target.value)}>
+                        {landowners.map(owner => (<option key={owner.id} value={owner.id}>{owner.first_name} {owner.last_name}</option>))}
+                      </select>
+                    ) : (
+                      <div className="text-sm text-amber-700 bg-amber-50 p-2 rounded border border-amber-200">No landowners in CRM. Add one first!</div>
+                    )}
+                  </div>
+                )}
+
+                <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">License # (From Wallet)</label>{userLicenses.length > 0 ? (<select className="w-full border p-2 rounded bg-white" value={newAreaLicense} onChange={e => setNewAreaLicense(e.target.value)}>{userLicenses.map((lic, i) => (<option key={i} value={lic}>{lic}</option>))}</select>) : (<div className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-200">No licenses found. Go to <strong>ID Wallet</strong> to add them first.</div>)}</div>
+                
+                <div className="flex justify-end gap-2 mt-6">
+                  <button onClick={() => setIsAreaModalOpen(false)} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded transition-colors">Cancel</button>
+                  <button onClick={handleSaveArea} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700 transition-colors">{isEditingArea ? 'Save Changes' : 'Create Area'}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* DEPLOY TRAP MODAL */}
         {isDeployModalOpen && (
@@ -451,7 +501,6 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {/* NEW: Dynamic visual feedback so you know how it's getting your location */}
                   {manualCoords ? (
                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800 flex flex-col gap-1">
                       <span className="font-bold">📍 Using Selected Map Location</span>
@@ -477,11 +526,7 @@ export default function Dashboard() {
               
               <div className="flex justify-end gap-2 mt-8 pt-4 border-t border-stone-100">
                 <button onClick={() => { setIsDeployModalOpen(false); setManualCoords(null); }} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded transition-colors">Cancel</button>
-                <button 
-                  onClick={handleDeployTrap} 
-                  disabled={inventory.length === 0}
-                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold hover:bg-emerald-700 transition-colors disabled:bg-stone-300 flex items-center gap-2"
-                >
+                <button onClick={handleDeployTrap} disabled={inventory.length === 0} className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-bold hover:bg-emerald-700 transition-colors disabled:bg-stone-300 flex items-center gap-2">
                   <MapPin className="h-4 w-4" /> Drop Pin
                 </button>
               </div>
@@ -516,24 +561,64 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* AREA MODAL */}
-        {isAreaModalOpen && (
-          <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95">
-              <div className="flex justify-between items-center mb-4">
-                 <h2 className="text-xl font-bold flex items-center gap-2 text-emerald-900"><MapIcon className="h-5 w-5" /> {isEditingArea ? 'Edit Operating Area' : 'Add Operating Area'}</h2>
-                 {isEditingArea && (<span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded-full font-bold">EDIT MODE</span>)}
+        {/* --- NEW: GETTING STARTED WELCOME MODAL --- */}
+        {isWelcomeModalOpen && (
+          <div className="fixed inset-0 bg-stone-900/70 backdrop-blur-sm flex items-center justify-center z-[100] p-4 sm:p-6 overflow-y-auto">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl my-auto animate-in zoom-in-95 overflow-hidden border-2 border-emerald-500">
+              
+              <div className="bg-gradient-to-r from-emerald-900 to-emerald-700 px-6 py-8 text-white relative">
+                <button onClick={() => setIsWelcomeModalOpen(false)} className="absolute top-4 right-4 text-emerald-300 hover:text-white transition-colors text-2xl font-light">&times;</button>
+                <Trees className="h-12 w-12 text-emerald-400 mb-4" />
+                <h2 className="text-3xl font-black tracking-tight mb-2">Welcome to TraplineOS</h2>
+                <p className="text-emerald-100 text-lg">Let's get your digital trapping operation set up. Follow these three steps to get started:</p>
               </div>
-              <div className="space-y-4">
-                <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">Area Name</label><input className="w-full border p-2 rounded" placeholder="e.g. South Bush Line" value={newAreaName} onChange={e => setNewAreaName(e.target.value)} /></div>
-                <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">MNRF District</label><select className="w-full border p-2 rounded bg-white" value={newAreaDistrict} onChange={e => setNewAreaDistrict(e.target.value)}>{ONTARIO_DISTRICTS.map(d => (<option key={d} value={d}>{d}</option>))}</select></div>
-                <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">Type</label><select value={newAreaType} onChange={e => setNewAreaType(e.target.value)} className="w-full border p-2 rounded bg-white"><option>Registered Line</option><option>Private Land</option></select></div>
-                <div><label className="block text-xs font-bold text-stone-500 uppercase mb-1">License # (From Wallet)</label>{userLicenses.length > 0 ? (<select className="w-full border p-2 rounded bg-white" value={newAreaLicense} onChange={e => setNewAreaLicense(e.target.value)}>{userLicenses.map((lic, i) => (<option key={i} value={lic}>{lic}</option>))}</select>) : (<div className="text-sm text-red-500 bg-red-50 p-2 rounded border border-red-200">No licenses found. Go to <strong>ID Wallet</strong> to add them first.</div>)}</div>
-                <div className="flex justify-end gap-2 mt-6">
-                  <button onClick={() => setIsAreaModalOpen(false)} className="px-4 py-2 text-stone-500 hover:bg-stone-100 rounded transition-colors">Cancel</button>
-                  <button onClick={handleSaveArea} className="px-4 py-2 bg-emerald-600 text-white rounded font-bold hover:bg-emerald-700 transition-colors">{isEditingArea ? 'Save Changes' : 'Create Area'}</button>
+
+              <div className="p-6 md:p-8 space-y-6 bg-stone-50">
+                
+                {/* Step 1 */}
+                <div className="flex flex-col md:flex-row gap-4 items-start md:items-center bg-white p-5 rounded-xl border border-stone-200 shadow-sm">
+                  <div className="bg-emerald-100 p-3 rounded-full shrink-0"><ShieldCheck className="h-6 w-6 text-emerald-700" /></div>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-lg text-stone-800">1. Update Your ID Wallet</h3>
+                    <p className="text-stone-500 text-sm">Store your PAL, Trapping Licenses, and OFMF insurance so you are always legal and the app can warn you before they expire.</p>
+                  </div>
+                  <button onClick={() => { setIsWelcomeModalOpen(false); router.push('/profile') }} className="w-full md:w-auto px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-lg transition-colors flex items-center justify-center gap-2">
+                    Go to Wallet <ArrowRight className="h-4 w-4" />
+                  </button>
                 </div>
+
+                {/* Step 2 */}
+                <div className="flex flex-col md:flex-row gap-4 items-start md:items-center bg-white p-5 rounded-xl border border-stone-200 shadow-sm">
+                  <div className="bg-emerald-100 p-3 rounded-full shrink-0"><Package className="h-6 w-6 text-emerald-700" /></div>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-lg text-stone-800">2. Stock Your Trap Shed</h3>
+                    <p className="text-stone-500 text-sm">Add your body-grippers, foot-holds, and snares to your digital inventory so you can deploy them onto the map later.</p>
+                  </div>
+                  <button onClick={() => { setIsWelcomeModalOpen(false); router.push('/inventory') }} className="w-full md:w-auto px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-lg transition-colors flex items-center justify-center gap-2">
+                    Go to Shed <ArrowRight className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {/* Step 3 */}
+                <div className="flex flex-col md:flex-row gap-4 items-start md:items-center bg-white p-5 rounded-xl border border-stone-200 shadow-sm border-l-4 border-l-emerald-500">
+                  <div className="bg-emerald-100 p-3 rounded-full shrink-0"><MapIcon className="h-6 w-6 text-emerald-700" /></div>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-lg text-stone-800">3. Map Your First Line</h3>
+                    <p className="text-stone-500 text-sm">Create an Operating Area. Whether it's a Registered Crown Line or Private Land from your CRM, this is where you'll log your harvest.</p>
+                  </div>
+                  <button onClick={() => { setIsWelcomeModalOpen(false); openCreateModal() }} className="w-full md:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-sm transition-colors flex items-center justify-center gap-2">
+                    Add Area <Plus className="h-4 w-4" />
+                  </button>
+                </div>
+
               </div>
+              
+              <div className="bg-white p-4 border-t border-stone-200 text-center">
+                <button onClick={() => setIsWelcomeModalOpen(false)} className="text-stone-400 hover:text-stone-600 text-sm font-medium transition-colors">
+                  I've got it, dismiss for now.
+                </button>
+              </div>
+
             </div>
           </div>
         )}
